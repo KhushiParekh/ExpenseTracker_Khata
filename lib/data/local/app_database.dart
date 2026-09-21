@@ -1,0 +1,304 @@
+import 'package:drift/drift.dart';
+import 'package:drift_flutter/drift_flutter.dart';
+
+part 'app_database.g.dart';
+
+// -----------------------------------------------------------------------
+// This local SQLite database is the ONLY place data lives. There is no
+// backend and no network access anywhere in the app.
+//
+// `updatedAt` is kept as a useful audit/sort field, and `deleted` gives us
+// soft deletes (so an accidental delete is recoverable from an export).
+// `pendingSync` is a vestigial column from an earlier cloud-backed design;
+// it is written but never read, and is retained only so the existing
+// generated schema keeps working without a migration.
+// -----------------------------------------------------------------------
+
+class Accounts extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get type => text()();
+  BoolColumn get isLiability => boolean().withDefault(const Constant(false))();
+  RealColumn get balance => real().withDefault(const Constant(0))();
+  BoolColumn get archived => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get updatedAt => dateTime()();
+  BoolColumn get pendingSync => boolean().withDefault(const Constant(true))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Categories extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get icon => text().withDefault(const Constant('📁'))();
+  TextColumn get kind => text()(); // expense / income
+  TextColumn get parentId => text().nullable()();
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+  DateTimeColumn get updatedAt => dateTime()();
+  BoolColumn get pendingSync => boolean().withDefault(const Constant(true))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Transactions extends Table {
+  TextColumn get id => text()();
+  TextColumn get type => text()(); // expense / income
+  TextColumn get accountId => text().nullable()();
+  TextColumn get categoryId => text().nullable()();
+  RealColumn get amount => real()();
+  TextColumn get remark => text().withDefault(const Constant(''))();
+  DateTimeColumn get txnDate => dateTime()();
+  BoolColumn get isYearly => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get updatedAt => dateTime()();
+  BoolColumn get deleted => boolean().withDefault(const Constant(false))();
+  BoolColumn get pendingSync => boolean().withDefault(const Constant(true))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class PeopleEntries extends Table {
+  TextColumn get id => text()();
+  TextColumn get type => text()(); // borrowed / lent
+  TextColumn get personName => text().withDefault(const Constant(''))();
+  TextColumn get accountId => text().nullable()();
+  RealColumn get amount => real()();
+  TextColumn get remark => text().withDefault(const Constant(''))();
+  DateTimeColumn get entryDate => dateTime()();
+  BoolColumn get settled => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get settledAt => dateTime().nullable()();
+  DateTimeColumn get updatedAt => dateTime()();
+  BoolColumn get deleted => boolean().withDefault(const Constant(false))();
+  BoolColumn get pendingSync => boolean().withDefault(const Constant(true))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Budgets extends Table {
+  TextColumn get id => text()();
+  IntColumn get year => integer()();
+  IntColumn get month => integer()();
+  RealColumn get amount => real().withDefault(const Constant(0))();
+  DateTimeColumn get updatedAt => dateTime()();
+  BoolColumn get pendingSync => boolean().withDefault(const Constant(true))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DriftDatabase(tables: [Accounts, Categories, Transactions, PeopleEntries, Budgets])
+class AppDatabase extends _$AppDatabase {
+  AppDatabase() : super(_openConnection());
+
+  @override
+  int get schemaVersion => 1;
+
+  // ---- Queries used by repositories / sync engine -----------------
+
+  Future<List<Transaction>> transactionsBetween(DateTime start, DateTime end, {bool includeYearly = true}) {
+    final q = select(transactions)
+      ..where((t) => t.deleted.equals(false))
+      ..where((t) => t.txnDate.isBiggerOrEqualValue(start) & t.txnDate.isSmallerOrEqualValue(end));
+    if (!includeYearly) {
+      q.where((t) => t.isYearly.equals(false));
+    }
+    return q.get();
+  }
+
+  /// ONLY the yearly-marked rows — this is the exclusive data source for
+  /// the Home → Yearly tab, which shows nothing else (no regular monthly
+  /// transactions bleed into this view).
+  Future<List<Transaction>> yearlyMarkedTransactionsBetween(DateTime start, DateTime end) {
+    return (select(transactions)
+          ..where((t) => t.deleted.equals(false))
+          ..where((t) => t.isYearly.equals(true))
+          ..where((t) => t.txnDate.isBiggerOrEqualValue(start) & t.txnDate.isSmallerOrEqualValue(end)))
+        .get();
+  }
+
+  Stream<List<Transaction>> watchYearlyMarkedTransactionsBetween(DateTime start, DateTime end) {
+    return (select(transactions)
+          ..where((t) => t.deleted.equals(false))
+          ..where((t) => t.isYearly.equals(true))
+          ..where((t) => t.txnDate.isBiggerOrEqualValue(start) & t.txnDate.isSmallerOrEqualValue(end)))
+        .watch();
+  }
+
+  Stream<List<Transaction>> watchTransactionsForDay(DateTime day) {
+    final start = DateTime(day.year, day.month, day.day);
+    final end = start.add(const Duration(days: 1));
+    return (select(transactions)
+          ..where((t) => t.deleted.equals(false))
+          ..where((t) => t.txnDate.isBiggerOrEqualValue(start) & t.txnDate.isSmallerThanValue(end)))
+        .watch();
+  }
+
+  /// Reactive version of [transactionsBetween] — used by the Calendar tab
+  /// so it repaints instantly on any add/edit/delete without a manual
+  /// reload call, and without re-querying per-day (one query for the
+  /// whole visible range instead of ~30).
+  Stream<List<Transaction>> watchTransactionsBetween(DateTime start, DateTime end, {bool includeYearly = true}) {
+    final q = select(transactions)
+      ..where((t) => t.deleted.equals(false))
+      ..where((t) => t.txnDate.isBiggerOrEqualValue(start) & t.txnDate.isSmallerOrEqualValue(end));
+    if (!includeYearly) {
+      q.where((t) => t.isYearly.equals(false));
+    }
+    return q.watch();
+  }
+
+  Future<List<PeopleEntry>> peopleEntriesForMonth(int year, int month) {
+    final start = DateTime(year, month, 1);
+    final end = DateTime(year, month + 1, 1);
+    return (select(peopleEntries)
+          ..where((p) => p.deleted.equals(false))
+          ..where((p) => p.entryDate.isBiggerOrEqualValue(start) & p.entryDate.isSmallerThanValue(end)))
+        .get();
+  }
+
+  Stream<List<PeopleEntry>> watchPeopleEntriesForMonth(int year, int month) {
+    final start = DateTime(year, month, 1);
+    final end = DateTime(year, month + 1, 1);
+    return (select(peopleEntries)
+          ..where((p) => p.deleted.equals(false))
+          ..where((p) => p.entryDate.isBiggerOrEqualValue(start) & p.entryDate.isSmallerThanValue(end)))
+        .watch();
+  }
+
+  /// ALL (settled + unsettled) people entries whose `entryDate` falls in
+  /// range — used to compute the "lent counts as an expense immediately"
+  /// rule. Deliberately not filtered by `settled` — an entry's original
+  /// creation-month effect never disappears, only a settle-month reversal
+  /// is added on top (see HomeTotalsRepository).
+  Stream<List<PeopleEntry>> watchPeopleEntriesByEntryDate(DateTime start, DateTime end) {
+    return (select(peopleEntries)
+          ..where((p) => p.deleted.equals(false))
+          ..where((p) => p.entryDate.isBiggerOrEqualValue(start) & p.entryDate.isSmallerOrEqualValue(end)))
+        .watch();
+  }
+
+  /// ALL settled people entries whose `settledAt` falls in range — the
+  /// settle-month delta (borrowed:+amount, lent:-amount).
+  Stream<List<PeopleEntry>> watchSettledPeopleEntriesBySettleDate(DateTime start, DateTime end) {
+    return (select(peopleEntries)
+          ..where((p) => p.deleted.equals(false))
+          ..where((p) => p.settled.equals(true))
+          ..where((p) => p.settledAt.isBiggerOrEqualValue(start) & p.settledAt.isSmallerOrEqualValue(end)))
+        .watch();
+  }
+
+  // ---- Global search ---------------------------------------------
+  // The search screen matches against remark, amount, category name and
+  // account name, so it needs the whole (non-deleted) transaction set plus
+  // the lookup tables. Filtering happens in Dart because matching across
+  // joined names is far clearer there, and a personal ledger is small
+  // enough that this is never a problem in practice.
+
+  Stream<List<Transaction>> watchAllTransactions() {
+    return (select(transactions)
+          ..where((t) => t.deleted.equals(false))
+          ..orderBy([(t) => OrderingTerm(expression: t.txnDate, mode: OrderingMode.desc)]))
+        .watch();
+  }
+
+  Stream<List<Account>> watchAllAccounts() => select(accounts).watch();
+
+  Stream<List<Category>> watchAllCategories() => select(categories).watch();
+
+  // ---- Export / import -------------------------------------------
+
+  Future<List<Transaction>> allTransactionsForExport() =>
+      (select(transactions)..where((t) => t.deleted.equals(false))).get();
+
+  Future<List<PeopleEntry>> allPeopleEntriesForExport() =>
+      (select(peopleEntries)..where((p) => p.deleted.equals(false))).get();
+
+  Future<List<Account>> allAccounts() => select(accounts).get();
+
+  Future<List<Category>> allCategories() => select(categories).get();
+
+  Future<List<Budget>> allBudgets() => select(budgets).get();
+
+  /// Wipes every user row. Default categories/accounts are re-seeded by
+  /// the caller so the app is never left in an unusable empty state.
+  Future<void> eraseAllData() async {
+    await transaction(() async {
+      await delete(transactions).go();
+      await delete(peopleEntries).go();
+      await delete(budgets).go();
+      await delete(categories).go();
+      await delete(accounts).go();
+    });
+  }
+
+  // ---- First-run seeding -----------------------------------------
+  // Previously this was a Postgres trigger that fired on user signup.
+  // With no accounts and no backend, the app seeds itself locally the
+  // first time it opens (and after an "erase all data").
+
+  Future<void> seedDefaultsIfEmpty() async {
+    final existingCategories = await select(categories).get();
+    final existingAccounts = await select(accounts).get();
+    final now = DateTime.now();
+
+    if (existingCategories.isEmpty) {
+      const defaultCategories = <List<String>>[
+        ['Social Life', '👫', 'expense'],
+        ['Food', '🍜', 'expense'],
+        ['Pets', '🐶', 'expense'],
+        ['Transport', '🚌', 'expense'],
+        ['Culture', '🖼️', 'expense'],
+        ['Household', '🪑', 'expense'],
+        ['Apparel', '🧥', 'expense'],
+        ['Beauty', '💄', 'expense'],
+        ['Health', '🧘', 'expense'],
+        ['Education', '📙', 'expense'],
+        ['Gift', '🎁', 'expense'],
+        ['Salary', '💰', 'income'],
+        ['Other Income', '➕', 'income'],
+      ];
+      int expenseOrder = 0;
+      int incomeOrder = 0;
+      for (final c in defaultCategories) {
+        final isExpense = c[2] == 'expense';
+        await into(categories).insert(CategoriesCompanion.insert(
+          id: 'cat_${c[0].toLowerCase().replaceAll(' ', '_')}',
+          name: c[0],
+          kind: c[2],
+          icon: Value(c[1]),
+          sortOrder: Value(isExpense ? expenseOrder++ : incomeOrder++),
+          updatedAt: now,
+          pendingSync: const Value(false),
+        ));
+      }
+    }
+
+    if (existingAccounts.isEmpty) {
+      const defaultAccounts = <List<dynamic>>[
+        ['UPI', 'upi', false],
+        ['Cash', 'cash', false],
+        ['Bank Account', 'bank', false],
+        ['Card', 'card', true],
+      ];
+      for (final a in defaultAccounts) {
+        await into(accounts).insert(AccountsCompanion.insert(
+          id: 'acc_${(a[0] as String).toLowerCase().replaceAll(' ', '_')}',
+          name: a[0] as String,
+          type: a[1] as String,
+          isLiability: Value(a[2] as bool),
+          updatedAt: now,
+          pendingSync: const Value(false),
+        ));
+      }
+    }
+  }
+}
+
+/// `driftDatabase` from `drift_flutter` auto-selects the right backend:
+/// native sqlite3 on Android, and IndexedDB-backed WASM sqlite on Web.
+QueryExecutor _openConnection() {
+  return driftDatabase(name: 'expense_tracker_db');
+}
