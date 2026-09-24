@@ -50,6 +50,33 @@ class StatisticsScreen extends ConsumerWidget {
     }
   }
 
+  /// Buckets matching rows by day (weekly/monthly) or by month (annual),
+  /// keyed by a short display label -- shared by the biggest/lowest
+  /// mini-cards and (conceptually) the trend chart below them.
+  Map<String, double> _bucketAmounts(List<Transaction> rows, DateTime start, DateTime end, StatsRange range) {
+    final result = <String, double>{};
+    if (range == StatsRange.annually) {
+      final byMonth = List<double>.filled(13, 0);
+      for (final r in rows) {
+        byMonth[r.txnDate.month] += r.amount;
+      }
+      for (int m = 1; m <= 12; m++) {
+        result[DateFormat.MMM().format(DateTime(start.year, m))] = byMonth[m];
+      }
+    } else {
+      final dayCount = end.difference(start).inDays + 1;
+      for (int i = 0; i < dayCount; i++) {
+        final d = start.add(Duration(days: i));
+        result[DateFormat('d MMM').format(d)] = 0;
+      }
+      for (final r in rows) {
+        final key = DateFormat('d MMM').format(r.txnDate);
+        result[key] = (result[key] ?? 0) + r.amount;
+      }
+    }
+    return result;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final range = ref.watch(_statsRangeProvider);
@@ -111,118 +138,334 @@ class StatisticsScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 6),
 
-          Expanded(
-            child: StreamBuilder<List<Transaction>>(
-              stream: txnRepo.watchStatsTransactionsBetween(start, end),
-              builder: (context, snap) {
-                if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-                final rows = snap.data!;
-                final matching = rows.where((r) => r.type == kind).toList();
-                final total = matching.fold(0.0, (a, b) => a + b.amount);
-                final yearlyPortion = matching.where((r) => r.isYearly).fold(0.0, (a, b) => a + b.amount);
+Expanded(
+  child: StreamBuilder<List<Transaction>>(
+    stream: txnRepo.watchStatsTransactionsBetween(
+      start,
+      end,
+    ),
+    builder: (context, snap) {
+      if (snap.connectionState == ConnectionState.waiting) {
+        return const Center(
+          child: CircularProgressIndicator(),
+        );
+      }
 
-                return categoriesAsync.when(
-                  data: (categories) {
-                    final slices = txnRepo.categoryBreakdown(rows, categories, kind: kind);
-
-                    return ListView(
-                      padding: const EdgeInsets.only(bottom: 24),
-                      children: [
-                        // ---- Headline ----
-                        Container(
-                          margin: const EdgeInsets.fromLTRB(12, 6, 12, 4),
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: (isIncome ? AppColors.incomeGreen : AppColors.expense).withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: (isIncome ? AppColors.incomeGreen : AppColors.expense).withOpacity(0.3)),
-                          ),
-                          child: Column(
-                            children: [
-                              Text(
-                                'Total ${isIncome ? 'income' : 'expense'}',
-                                style: const TextStyle(fontSize: 12, color: Colors.grey),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '$kCurrencySymbol${total.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  color: isIncome ? AppColors.incomeGreen : AppColors.expense,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 26,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                '${matching.length} transaction${matching.length == 1 ? '' : 's'}'
-                                '${yearlyPortion > 0 ? ' · includes $kCurrencySymbol${yearlyPortion.toStringAsFixed(0)} yearly-marked' : ''}',
-                                style: const TextStyle(fontSize: 11, color: Colors.grey),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        ),
-
-                        // ---- Category donut ----
-                        ChartCard(
-                          title: 'By category',
-                          subtitle: label,
-                          height: 180,
-                          child: CompactCategoryDonut(slices: slices),
-                        ),
-
-                        // ---- Trend within the period ----
-                        ChartCard(
-                          title: range == StatsRange.annually ? 'Month by month' : 'Day by day',
-                          subtitle: 'Trend across $label',
-                          height: 170,
-                          child: _PeriodTrendChart(
-                            rows: matching,
-                            start: start,
-                            end: end,
-                            range: range,
-                            color: isIncome ? AppColors.incomeGreen : AppColors.expense,
-                          ),
-                        ),
-
-                        // ---- Full category list ----
-                        if (slices.isNotEmpty) ...[
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 12, 16, 6),
-                            child: Text('All categories', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                          ),
-                          const Divider(height: 1),
-                          ...slices.map((s) => ListTile(
-                                dense: true,
-                                leading: Text(s.icon, style: const TextStyle(fontSize: 18)),
-                                title: Text(s.name, style: const TextStyle(fontSize: 14)),
-                                subtitle: LinearProgressIndicator(
-                                  value: (s.percent / 100).clamp(0, 1),
-                                  minHeight: 3,
-                                  backgroundColor: Colors.white10,
-                                  valueColor: AlwaysStoppedAnimation(isIncome ? AppColors.incomeGreen : AppColors.expense),
-                                ),
-                                trailing: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Text('$kCurrencySymbol${s.amount.toStringAsFixed(0)}',
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                    Text('${s.percent.toStringAsFixed(0)}%',
-                                        style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                                  ],
-                                ),
-                              )),
-                        ],
-                      ],
-                    );
-                  },
-                  loading: () => const Center(child: CircularProgressIndicator()),
-                  error: (e, _) => Center(child: Text('$e')),
-                );
-              },
+      if (snap.hasError) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              'Statistics error:\n${snap.error}',
+              textAlign: TextAlign.center,
             ),
           ),
+        );
+      }
+
+      final rows = snap.data ?? [];
+
+      final matching = rows
+          .where((r) => r.type == kind)
+          .toList();
+
+      final total = matching.fold<double>(
+        0,
+        (sum, transaction) => sum + transaction.amount,
+      );
+
+      final yearlyPortion = matching
+          .where((r) => r.isYearly)
+          .fold<double>(
+            0,
+            (sum, transaction) => sum + transaction.amount,
+          );
+
+      // Categories are only needed for names/icons.
+      // If they are not ready yet, use an empty list temporarily.
+      final categories = categoriesAsync.maybeWhen(
+        data: (value) => value,
+        orElse: () => <Category>[],
+      );
+
+      final slices = txnRepo.categoryBreakdown(
+        matching,
+        categories,
+        kind: kind,
+      );
+
+      final buckets = _bucketAmounts(
+        matching,
+        start,
+        end,
+        range,
+      );
+
+      final nonZero = buckets.entries
+          .where((e) => e.value > 0)
+          .toList();
+
+      MapEntry<String, double>? biggest;
+      MapEntry<String, double>? lowest;
+
+      if (nonZero.isNotEmpty) {
+        biggest = nonZero.reduce(
+          (a, b) => a.value >= b.value ? a : b,
+        );
+
+        lowest = nonZero.reduce(
+          (a, b) => a.value <= b.value ? a : b,
+        );
+      }
+
+      return ListView(
+        padding: const EdgeInsets.only(bottom: 24),
+        children: [
+
+          // =========================================================
+          // BY CATEGORY
+          // =========================================================
+
+          ChartCard(
+            title: 'By category',
+            subtitle: label,
+            height: 180,
+            child: CompactCategoryDonut(
+              slices: slices,
+            ),
+          ),
+
+          // =========================================================
+          // TOTAL + BIGGEST / LOWEST
+          // =========================================================
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              12,
+              2,
+              12,
+              4,
+            ),
+            child: Row(
+              crossAxisAlignment:
+                  CrossAxisAlignment.stretch,
+              children: [
+
+                Expanded(
+                  child: _StatMiniCard(
+                    label: isIncome
+                        ? 'Total Income'
+                        : 'Total Expense',
+                    value:
+                        '$kCurrencySymbol${compactAmount(total)}',
+                    color: isIncome
+                        ? AppColors.incomeGreen
+                        : AppColors.expense,
+                    footer:
+                        '${matching.length} transaction${matching.length == 1 ? '' : 's'}'
+                        '${yearlyPortion > 0 ? ' · $kCurrencySymbol${compactAmount(yearlyPortion)} yearly' : ''}',
+                  ),
+                ),
+
+                const SizedBox(width: 10),
+
+                Expanded(
+                  child: _StatMiniCard(
+                    label: 'Biggest / Lowest',
+                    value: biggest == null
+                        ? '—'
+                        : '${biggest.key} '
+                            '$kCurrencySymbol'
+                            '${compactAmount(biggest.value)}',
+                    color: AppColors.accent,
+                    footer: lowest == null
+                        ? null
+                        : 'Lowest: ${lowest.key} '
+                            '$kCurrencySymbol'
+                            '${compactAmount(lowest.value)}',
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // =========================================================
+          // TREND
+          // =========================================================
+
+          ChartCard(
+            title: range == StatsRange.annually
+                ? 'Month by month'
+                : 'Day by day',
+            subtitle: 'Trend across $label',
+            height: 170,
+            child: _PeriodTrendChart(
+              rows: matching,
+              start: start,
+              end: end,
+              range: range,
+              color: isIncome
+                  ? AppColors.incomeGreen
+                  : AppColors.expense,
+            ),
+          ),
+
+          // =========================================================
+          // ALL CATEGORIES
+          // =========================================================
+
+          if (slices.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                6,
+              ),
+              child: Text(
+                'All categories',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+
+            const Divider(height: 1),
+
+            ...slices.map(
+              (s) => ListTile(
+                dense: true,
+                leading: Text(
+                  s.icon,
+                  style: const TextStyle(
+                    fontSize: 18,
+                  ),
+                ),
+                title: Text(
+                  s.name,
+                  style: const TextStyle(
+                    fontSize: 14,
+                  ),
+                ),
+                subtitle: LinearProgressIndicator(
+                  value: (s.percent / 100).clamp(0, 1),
+                  minHeight: 3,
+                  backgroundColor: Colors.white10,
+                  valueColor:
+                      AlwaysStoppedAnimation(
+                    isIncome
+                        ? AppColors.incomeGreen
+                        : AppColors.expense,
+                  ),
+                ),
+                trailing: Column(
+                  mainAxisAlignment:
+                      MainAxisAlignment.center,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '$kCurrencySymbol${s.amount.toStringAsFixed(0)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                    Text(
+                      '${s.percent.toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
+          // =========================================================
+          // NO TRANSACTIONS
+          // =========================================================
+
+          if (rows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(
+                top: 20,
+                left: 20,
+                right: 20,
+              ),
+              child: Center(
+                child: Text(
+                  'No transactions recorded for this period.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ),
+
+          if (rows.isNotEmpty && matching.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(
+                top: 20,
+                left: 20,
+                right: 20,
+              ),
+              child: Center(
+                child: Text(
+                  isIncome
+                      ? 'No income transactions for this period.'
+                      : 'No expense transactions for this period.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.grey,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    },
+  ),
+),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatMiniCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  final String? footer;
+  const _StatMiniCard({required this.label, required this.value, required this.color, this.footer});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.28)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 10.5, color: Colors.grey), maxLines: 1, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 5),
+          Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: color), maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (footer != null) ...[
+            const SizedBox(height: 4),
+            Text(footer!, style: const TextStyle(fontSize: 10, color: Colors.grey), maxLines: 1, overflow: TextOverflow.ellipsis),
+          ],
         ],
       ),
     );

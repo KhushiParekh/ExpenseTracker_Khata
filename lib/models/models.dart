@@ -174,3 +174,29 @@ class CategorySlice {
   double percent = 0;
   CategorySlice({required this.categoryId, required this.name, required this.icon, required this.amount});
 }
+
+/// Summary of one active recurring transaction series, for the "Manage
+/// recurring" list in the More screen.
+class RecurringSeriesInfo {
+  final String groupId;
+  final String type; // expense / income
+  final double amount;
+  final String remark;
+  final String? categoryId;
+  final String frequency; // weekly / monthly / annually
+  final DateTime nextDate;
+  final int remainingCount;
+  final int totalCount;
+
+  RecurringSeriesInfo({
+    required this.groupId,
+    required this.type,
+    required this.amount,
+    required this.remark,
+    required this.categoryId,
+    required this.frequency,
+    required this.nextDate,
+    required this.remainingCount,
+    required this.totalCount,
+  });
+}

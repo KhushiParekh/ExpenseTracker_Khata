@@ -50,13 +50,7 @@ class YearlyTab extends ConsumerWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Yearly-marked spend', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                          SizedBox(height: 2),
-                        ],
-                      ),
+                      const Text('Yearly-marked spend', style: TextStyle(fontSize: 12, color: Colors.grey)),
                       Text(
                         '$kCurrencySymbol${yearTotal.toStringAsFixed(0)}',
                         style: const TextStyle(color: AppColors.expense, fontWeight: FontWeight.bold, fontSize: 22),
@@ -77,7 +71,7 @@ class YearlyTab extends ConsumerWidget {
 
             if (biggest != null && biggest.expense > 0)
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
                 child: Row(
                   children: [
                     Expanded(
@@ -89,13 +83,44 @@ class YearlyTab extends ConsumerWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: _MiniStat(
-                        label: 'Avg / active month',
-                        value: '$kCurrencySymbol${compactAmount(activeMonths == 0 ? 0 : yearTotal / activeMonths)}',
+                        label: 'Total Expense',
+                        value: '$kCurrencySymbol${compactAmount(yearTotal)}',
                       ),
                     ),
                   ],
                 ),
               ),
+
+            // ---- Month-by-month rows (only months with yearly-marked spend) ----
+            if (activeMonths > 0) ...[
+              Container(
+                margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                decoration: BoxDecoration(
+                  color: AppColors.surface.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Builder(builder: (context) {
+                  final activeMonths = months.where((m) => m.expense > 0).toList().reversed.toList();
+                  return Column(
+                    children: [
+                      for (int i = 0; i < activeMonths.length; i++) ...[
+                        ListTile(
+                          dense: true,
+                          title: Text(DateFormat.MMMM().format(DateTime(activeMonths[i].year, activeMonths[i].month)), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                          trailing: Text(
+                            '$kCurrencySymbol${activeMonths[i].expense.toStringAsFixed(0)}',
+                            style: const TextStyle(color: AppColors.expense, fontWeight: FontWeight.bold),
+                          ),
+                          onTap: () => ref.read(focusedMonthProvider.notifier).state = DateTime(activeMonths[i].year, activeMonths[i].month),
+                        ),
+                        if (i < activeMonths.length - 1) const Divider(height: 1, indent: 16, endIndent: 16),
+                      ],
+                    ],
+                  );
+                }),
+              ),
+            ],
 
             // ---- Charts ----
             ChartCard(
@@ -113,7 +138,7 @@ class YearlyTab extends ConsumerWidget {
                   }
                   final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: 'expense');
                   return ChartCard(
-                    title: 'By category',
+                    title: 'By categories',
                     subtitle: 'Yearly-marked spend, $year',
                     height: 170,
                     child: CompactCategoryDonut(slices: slices),
@@ -154,7 +179,11 @@ class YearlyTab extends ConsumerWidget {
                         final cat = t.categoryId == null ? null : catsById[t.categoryId];
                         return ListTile(
                           dense: true,
-                          leading: Text(cat?.icon ?? '📁', style: const TextStyle(fontSize: 18)),
+                          leading: CircleAvatar(
+                            radius: 16,
+                            backgroundColor: AppColors.expense.withOpacity(0.12),
+                            child: Text(cat?.icon ?? '📁', style: const TextStyle(fontSize: 15)),
+                          ),
                           title: Text(
                             t.remark.isEmpty ? (cat?.name ?? 'Yearly expense') : t.remark,
                             style: const TextStyle(fontSize: 14),

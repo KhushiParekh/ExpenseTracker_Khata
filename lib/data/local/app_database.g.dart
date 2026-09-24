@@ -906,6 +906,12 @@ class $TransactionsTable extends Transactions
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_yearly" IN (0, 1))'),
       defaultValue: const Constant(false));
+  static const VerificationMeta _recurringGroupIdMeta =
+      const VerificationMeta('recurringGroupId');
+  @override
+  late final GeneratedColumn<String> recurringGroupId = GeneratedColumn<String>(
+      'recurring_group_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _updatedAtMeta =
       const VerificationMeta('updatedAt');
   @override
@@ -942,6 +948,7 @@ class $TransactionsTable extends Transactions
         remark,
         txnDate,
         isYearly,
+        recurringGroupId,
         updatedAt,
         deleted,
         pendingSync
@@ -997,6 +1004,12 @@ class $TransactionsTable extends Transactions
       context.handle(_isYearlyMeta,
           isYearly.isAcceptableOrUnknown(data['is_yearly']!, _isYearlyMeta));
     }
+    if (data.containsKey('recurring_group_id')) {
+      context.handle(
+          _recurringGroupIdMeta,
+          recurringGroupId.isAcceptableOrUnknown(
+              data['recurring_group_id']!, _recurringGroupIdMeta));
+    }
     if (data.containsKey('updated_at')) {
       context.handle(_updatedAtMeta,
           updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
@@ -1038,6 +1051,8 @@ class $TransactionsTable extends Transactions
           .read(DriftSqlType.dateTime, data['${effectivePrefix}txn_date'])!,
       isYearly: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}is_yearly'])!,
+      recurringGroupId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}recurring_group_id']),
       updatedAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at'])!,
       deleted: attachedDatabase.typeMapping
@@ -1062,6 +1077,7 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   final String remark;
   final DateTime txnDate;
   final bool isYearly;
+  final String? recurringGroupId;
   final DateTime updatedAt;
   final bool deleted;
   final bool pendingSync;
@@ -1074,6 +1090,7 @@ class Transaction extends DataClass implements Insertable<Transaction> {
       required this.remark,
       required this.txnDate,
       required this.isYearly,
+      this.recurringGroupId,
       required this.updatedAt,
       required this.deleted,
       required this.pendingSync});
@@ -1092,6 +1109,9 @@ class Transaction extends DataClass implements Insertable<Transaction> {
     map['remark'] = Variable<String>(remark);
     map['txn_date'] = Variable<DateTime>(txnDate);
     map['is_yearly'] = Variable<bool>(isYearly);
+    if (!nullToAbsent || recurringGroupId != null) {
+      map['recurring_group_id'] = Variable<String>(recurringGroupId);
+    }
     map['updated_at'] = Variable<DateTime>(updatedAt);
     map['deleted'] = Variable<bool>(deleted);
     map['pending_sync'] = Variable<bool>(pendingSync);
@@ -1112,6 +1132,9 @@ class Transaction extends DataClass implements Insertable<Transaction> {
       remark: Value(remark),
       txnDate: Value(txnDate),
       isYearly: Value(isYearly),
+      recurringGroupId: recurringGroupId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recurringGroupId),
       updatedAt: Value(updatedAt),
       deleted: Value(deleted),
       pendingSync: Value(pendingSync),
@@ -1130,6 +1153,7 @@ class Transaction extends DataClass implements Insertable<Transaction> {
       remark: serializer.fromJson<String>(json['remark']),
       txnDate: serializer.fromJson<DateTime>(json['txnDate']),
       isYearly: serializer.fromJson<bool>(json['isYearly']),
+      recurringGroupId: serializer.fromJson<String?>(json['recurringGroupId']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
       deleted: serializer.fromJson<bool>(json['deleted']),
       pendingSync: serializer.fromJson<bool>(json['pendingSync']),
@@ -1147,6 +1171,7 @@ class Transaction extends DataClass implements Insertable<Transaction> {
       'remark': serializer.toJson<String>(remark),
       'txnDate': serializer.toJson<DateTime>(txnDate),
       'isYearly': serializer.toJson<bool>(isYearly),
+      'recurringGroupId': serializer.toJson<String?>(recurringGroupId),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
       'deleted': serializer.toJson<bool>(deleted),
       'pendingSync': serializer.toJson<bool>(pendingSync),
@@ -1162,6 +1187,7 @@ class Transaction extends DataClass implements Insertable<Transaction> {
           String? remark,
           DateTime? txnDate,
           bool? isYearly,
+          Value<String?> recurringGroupId = const Value.absent(),
           DateTime? updatedAt,
           bool? deleted,
           bool? pendingSync}) =>
@@ -1174,6 +1200,9 @@ class Transaction extends DataClass implements Insertable<Transaction> {
         remark: remark ?? this.remark,
         txnDate: txnDate ?? this.txnDate,
         isYearly: isYearly ?? this.isYearly,
+        recurringGroupId: recurringGroupId.present
+            ? recurringGroupId.value
+            : this.recurringGroupId,
         updatedAt: updatedAt ?? this.updatedAt,
         deleted: deleted ?? this.deleted,
         pendingSync: pendingSync ?? this.pendingSync,
@@ -1189,6 +1218,9 @@ class Transaction extends DataClass implements Insertable<Transaction> {
       remark: data.remark.present ? data.remark.value : this.remark,
       txnDate: data.txnDate.present ? data.txnDate.value : this.txnDate,
       isYearly: data.isYearly.present ? data.isYearly.value : this.isYearly,
+      recurringGroupId: data.recurringGroupId.present
+          ? data.recurringGroupId.value
+          : this.recurringGroupId,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       deleted: data.deleted.present ? data.deleted.value : this.deleted,
       pendingSync:
@@ -1207,6 +1239,7 @@ class Transaction extends DataClass implements Insertable<Transaction> {
           ..write('remark: $remark, ')
           ..write('txnDate: $txnDate, ')
           ..write('isYearly: $isYearly, ')
+          ..write('recurringGroupId: $recurringGroupId, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deleted: $deleted, ')
           ..write('pendingSync: $pendingSync')
@@ -1215,8 +1248,19 @@ class Transaction extends DataClass implements Insertable<Transaction> {
   }
 
   @override
-  int get hashCode => Object.hash(id, type, accountId, categoryId, amount,
-      remark, txnDate, isYearly, updatedAt, deleted, pendingSync);
+  int get hashCode => Object.hash(
+      id,
+      type,
+      accountId,
+      categoryId,
+      amount,
+      remark,
+      txnDate,
+      isYearly,
+      recurringGroupId,
+      updatedAt,
+      deleted,
+      pendingSync);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1229,6 +1273,7 @@ class Transaction extends DataClass implements Insertable<Transaction> {
           other.remark == this.remark &&
           other.txnDate == this.txnDate &&
           other.isYearly == this.isYearly &&
+          other.recurringGroupId == this.recurringGroupId &&
           other.updatedAt == this.updatedAt &&
           other.deleted == this.deleted &&
           other.pendingSync == this.pendingSync);
@@ -1243,6 +1288,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
   final Value<String> remark;
   final Value<DateTime> txnDate;
   final Value<bool> isYearly;
+  final Value<String?> recurringGroupId;
   final Value<DateTime> updatedAt;
   final Value<bool> deleted;
   final Value<bool> pendingSync;
@@ -1256,6 +1302,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
     this.remark = const Value.absent(),
     this.txnDate = const Value.absent(),
     this.isYearly = const Value.absent(),
+    this.recurringGroupId = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.deleted = const Value.absent(),
     this.pendingSync = const Value.absent(),
@@ -1270,6 +1317,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
     this.remark = const Value.absent(),
     required DateTime txnDate,
     this.isYearly = const Value.absent(),
+    this.recurringGroupId = const Value.absent(),
     required DateTime updatedAt,
     this.deleted = const Value.absent(),
     this.pendingSync = const Value.absent(),
@@ -1288,6 +1336,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
     Expression<String>? remark,
     Expression<DateTime>? txnDate,
     Expression<bool>? isYearly,
+    Expression<String>? recurringGroupId,
     Expression<DateTime>? updatedAt,
     Expression<bool>? deleted,
     Expression<bool>? pendingSync,
@@ -1302,6 +1351,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
       if (remark != null) 'remark': remark,
       if (txnDate != null) 'txn_date': txnDate,
       if (isYearly != null) 'is_yearly': isYearly,
+      if (recurringGroupId != null) 'recurring_group_id': recurringGroupId,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (deleted != null) 'deleted': deleted,
       if (pendingSync != null) 'pending_sync': pendingSync,
@@ -1318,6 +1368,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
       Value<String>? remark,
       Value<DateTime>? txnDate,
       Value<bool>? isYearly,
+      Value<String?>? recurringGroupId,
       Value<DateTime>? updatedAt,
       Value<bool>? deleted,
       Value<bool>? pendingSync,
@@ -1331,6 +1382,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
       remark: remark ?? this.remark,
       txnDate: txnDate ?? this.txnDate,
       isYearly: isYearly ?? this.isYearly,
+      recurringGroupId: recurringGroupId ?? this.recurringGroupId,
       updatedAt: updatedAt ?? this.updatedAt,
       deleted: deleted ?? this.deleted,
       pendingSync: pendingSync ?? this.pendingSync,
@@ -1365,6 +1417,9 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
     if (isYearly.present) {
       map['is_yearly'] = Variable<bool>(isYearly.value);
     }
+    if (recurringGroupId.present) {
+      map['recurring_group_id'] = Variable<String>(recurringGroupId.value);
+    }
     if (updatedAt.present) {
       map['updated_at'] = Variable<DateTime>(updatedAt.value);
     }
@@ -1391,6 +1446,7 @@ class TransactionsCompanion extends UpdateCompanion<Transaction> {
           ..write('remark: $remark, ')
           ..write('txnDate: $txnDate, ')
           ..write('isYearly: $isYearly, ')
+          ..write('recurringGroupId: $recurringGroupId, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deleted: $deleted, ')
           ..write('pendingSync: $pendingSync, ')
@@ -2779,6 +2835,7 @@ typedef $$TransactionsTableCreateCompanionBuilder = TransactionsCompanion
   Value<String> remark,
   required DateTime txnDate,
   Value<bool> isYearly,
+  Value<String?> recurringGroupId,
   required DateTime updatedAt,
   Value<bool> deleted,
   Value<bool> pendingSync,
@@ -2794,6 +2851,7 @@ typedef $$TransactionsTableUpdateCompanionBuilder = TransactionsCompanion
   Value<String> remark,
   Value<DateTime> txnDate,
   Value<bool> isYearly,
+  Value<String?> recurringGroupId,
   Value<DateTime> updatedAt,
   Value<bool> deleted,
   Value<bool> pendingSync,
@@ -2832,6 +2890,10 @@ class $$TransactionsTableFilterComposer
 
   ColumnFilters<bool> get isYearly => $composableBuilder(
       column: $table.isYearly, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get recurringGroupId => $composableBuilder(
+      column: $table.recurringGroupId,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get updatedAt => $composableBuilder(
       column: $table.updatedAt, builder: (column) => ColumnFilters(column));
@@ -2876,6 +2938,10 @@ class $$TransactionsTableOrderingComposer
   ColumnOrderings<bool> get isYearly => $composableBuilder(
       column: $table.isYearly, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get recurringGroupId => $composableBuilder(
+      column: $table.recurringGroupId,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
       column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
 
@@ -2918,6 +2984,9 @@ class $$TransactionsTableAnnotationComposer
 
   GeneratedColumn<bool> get isYearly =>
       $composableBuilder(column: $table.isYearly, builder: (column) => column);
+
+  GeneratedColumn<String> get recurringGroupId => $composableBuilder(
+      column: $table.recurringGroupId, builder: (column) => column);
 
   GeneratedColumn<DateTime> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
@@ -2963,6 +3032,7 @@ class $$TransactionsTableTableManager extends RootTableManager<
             Value<String> remark = const Value.absent(),
             Value<DateTime> txnDate = const Value.absent(),
             Value<bool> isYearly = const Value.absent(),
+            Value<String?> recurringGroupId = const Value.absent(),
             Value<DateTime> updatedAt = const Value.absent(),
             Value<bool> deleted = const Value.absent(),
             Value<bool> pendingSync = const Value.absent(),
@@ -2977,6 +3047,7 @@ class $$TransactionsTableTableManager extends RootTableManager<
             remark: remark,
             txnDate: txnDate,
             isYearly: isYearly,
+            recurringGroupId: recurringGroupId,
             updatedAt: updatedAt,
             deleted: deleted,
             pendingSync: pendingSync,
@@ -2991,6 +3062,7 @@ class $$TransactionsTableTableManager extends RootTableManager<
             Value<String> remark = const Value.absent(),
             required DateTime txnDate,
             Value<bool> isYearly = const Value.absent(),
+            Value<String?> recurringGroupId = const Value.absent(),
             required DateTime updatedAt,
             Value<bool> deleted = const Value.absent(),
             Value<bool> pendingSync = const Value.absent(),
@@ -3005,6 +3077,7 @@ class $$TransactionsTableTableManager extends RootTableManager<
             remark: remark,
             txnDate: txnDate,
             isYearly: isYearly,
+            recurringGroupId: recurringGroupId,
             updatedAt: updatedAt,
             deleted: deleted,
             pendingSync: pendingSync,

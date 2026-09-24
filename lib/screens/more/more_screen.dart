@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../../core/constants.dart';
+import '../../data/local/app_database.dart';
+import '../../models/models.dart';
 import '../../providers/app_providers.dart';
 import '../categories/category_management_screen.dart';
 
@@ -188,6 +191,10 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                 ),
                 const SizedBox(height: 16),
 
+                // ---- Recurring transactions ----
+                _RecurringCard(),
+                const SizedBox(height: 16),
+
                 // ---- Danger zone ----
                 Container(
                   padding: const EdgeInsets.all(20),
@@ -299,6 +306,134 @@ class _WideButton extends StatelessWidget {
           style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
         ),
       ),
+    );
+  }
+}
+
+/// Lists every recurring series that still has occurrences ahead of it,
+/// with a "Stop" action that cancels everything from today onward while
+/// leaving whatever it already created in place.
+class _RecurringCard extends ConsumerWidget {
+  const _RecurringCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final categoriesAsync = ref.watch(allCategoriesProvider);
+    final seriesAsync = ref.watch(_activeRecurringProvider);
+
+    return _Card(
+      title: 'Recurring Transactions',
+      child: seriesAsync.when(
+        data: (series) {
+          if (series.isEmpty) {
+            return const Text(
+              'Nothing repeating right now. Turn on the repeat icon while adding an '
+              'expense or income to schedule one.',
+              style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.45),
+            );
+          }
+          final categories = categoriesAsync.value ?? const [];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final s in series) ...[
+                _RecurringRow(info: s, categories: categories),
+                if (s != series.last) const Divider(height: 20, color: Colors.white10),
+              ],
+            ],
+          );
+        },
+        loading: () => const Padding(
+          padding: EdgeInsets.symmetric(vertical: 12),
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+        error: (e, _) => Text('$e', style: const TextStyle(color: AppColors.expense)),
+      ),
+    );
+  }
+}
+
+final _activeRecurringProvider = StreamProvider<List<RecurringSeriesInfo>>(
+  (ref) => ref.watch(transactionRepoProvider).watchActiveRecurringSeries(),
+);
+
+class _RecurringRow extends ConsumerWidget {
+  final RecurringSeriesInfo info;
+  final List<Category> categories;
+  const _RecurringRow({required this.info, required this.categories});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final matches = info.categoryId == null ? const <Category>[] : categories.where((c) => c.id == info.categoryId).toList();
+    final cat = matches.isEmpty ? null : matches.first;
+    final isExpense = info.type == 'expense';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(cat?.icon ?? (isExpense ? '💸' : '➕'), style: const TextStyle(fontSize: 20)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                info.remark.isEmpty ? (cat?.name ?? (isExpense ? 'Expense' : 'Income')) : info.remark,
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                'Every ${info.frequency.substring(0, info.frequency.length - 2)} · next ${DateFormat('d MMM').format(info.nextDate)} '
+                '· ${info.remainingCount} left of ${info.totalCount}',
+                style: const TextStyle(color: Colors.grey, fontSize: 11.5),
+              ),
+            ],
+          ),
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              '$kCurrencySymbol${info.amount.toStringAsFixed(0)}',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: isExpense ? AppColors.expense : AppColors.incomeGreen,
+              ),
+            ),
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('Stop this series?'),
+                    content: Text(
+                      'This cancels the ${info.remainingCount} occurrence${info.remainingCount == 1 ? '' : 's'} '
+                      'still ahead. What already happened stays in your ledger.',
+                    ),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Keep it')),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Stop', style: TextStyle(color: AppColors.expense)),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  final cancelled = await ref.read(transactionRepoProvider).stopRecurring(info.groupId);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Stopped — $cancelled upcoming occurrence${cancelled == 1 ? '' : 's'} cancelled.')),
+                    );
+                  }
+                }
+              },
+              child: const Text('Stop', style: TextStyle(color: AppColors.expense, fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

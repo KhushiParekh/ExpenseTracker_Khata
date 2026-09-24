@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import '../core/constants.dart';
 import '../data/local/app_database.dart';
 import '../providers/app_providers.dart';
 import '../screens/categories/category_management_screen.dart';
+
+const _uuid = Uuid();
 
 Future<void> showAddTransactionModal(BuildContext context, WidgetRef ref, DateTime initialDate) {
   return showModalBottomSheet(
@@ -62,6 +65,8 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
 
   bool _isRecurring = false;
   String _recurringFrequency = 'monthly'; // weekly | monthly | annually
+  int _recurringCount = 12; // used unless _recurringEndDate is set
+  DateTime? _recurringEndDate; // when set, overrides _recurringCount
 
   bool _accountDefaultApplied = false;
   late DateTime _date;
@@ -107,23 +112,137 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
     setState(() {});
   }
 
-  List<DateTime> _generateRecurringDates(DateTime start, String frequency, {int count = 12}) {
+  DateTime _recurringOccurrence(DateTime start, String frequency, int i) {
+    if (frequency == 'weekly') return start.add(Duration(days: 7 * i));
+    if (frequency == 'annually') return DateTime(start.year + i, start.month, start.day, start.hour, start.minute);
+    // monthly
+    final year = start.year + ((start.month - 1 + i) ~/ 12);
+    final month = ((start.month - 1 + i) % 12) + 1;
+    var day = start.day;
+    final maxDays = DateUtils.getDaysInMonth(year, month);
+    if (day > maxDays) day = maxDays;
+    return DateTime(year, month, day, start.hour, start.minute);
+  }
+
+  /// Builds every date in the series: either a fixed number of occurrences,
+  /// or every occurrence up to (and including) an end date — whichever the
+  /// user chose in the "Repeat range" dialog.
+  List<DateTime> _generateRecurringDates(DateTime start, String frequency) {
     final dates = <DateTime>[];
-    for (int i = 0; i < count; i++) {
-      if (frequency == 'weekly') {
-        dates.add(start.add(Duration(days: 7 * i)));
-      } else if (frequency == 'monthly') {
-        final year = start.year + ((start.month - 1 + i) ~/ 12);
-        final month = ((start.month - 1 + i) % 12) + 1;
-        var day = start.day;
-        final maxDays = DateUtils.getDaysInMonth(year, month);
-        if (day > maxDays) day = maxDays;
-        dates.add(DateTime(year, month, day, start.hour, start.minute));
-      } else if (frequency == 'annually') {
-        dates.add(DateTime(start.year + i, start.month, start.day, start.hour, start.minute));
+    final endDate = _recurringEndDate;
+    if (endDate != null) {
+      // Safety cap so a mistaken far-future end date can't hang the app
+      // or flood the ledger with thousands of rows.
+      for (int i = 0; i < 500; i++) {
+        final d = _recurringOccurrence(start, frequency, i);
+        if (d.isAfter(endDate)) break;
+        dates.add(d);
+      }
+    } else {
+      for (int i = 0; i < _recurringCount; i++) {
+        dates.add(_recurringOccurrence(start, frequency, i));
       }
     }
     return dates;
+  }
+
+  String get _recurringRangeLabel {
+    if (_recurringEndDate != null) {
+      return 'until ${_recurringEndDate!.day}/${_recurringEndDate!.month}/${_recurringEndDate!.year}';
+    }
+    return '$_recurringCount time${_recurringCount == 1 ? '' : 's'}';
+  }
+
+  /// Lets the person pick how far a recurring series should run — either
+  /// a fixed number of occurrences, or up to a chosen end date.
+  Future<void> _configureRecurringRange() async {
+    int tempCount = _recurringCount;
+    DateTime? tempEnd = _recurringEndDate;
+    bool useEndDate = tempEnd != null;
+
+    await showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          title: const Text('Repeat range'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              RadioListTile<bool>(
+                contentPadding: EdgeInsets.zero,
+                value: false,
+                groupValue: useEndDate,
+                title: const Text('Number of occurrences'),
+                onChanged: (v) => setDialogState(() => useEndDate = false),
+              ),
+              if (!useEndDate)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, bottom: 8),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: () => setDialogState(() => tempCount = (tempCount - 1).clamp(2, 120)),
+                      ),
+                      Text('$tempCount time${tempCount == 1 ? '' : 's'}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () => setDialogState(() => tempCount = (tempCount + 1).clamp(2, 120)),
+                      ),
+                    ],
+                  ),
+                ),
+              RadioListTile<bool>(
+                contentPadding: EdgeInsets.zero,
+                value: true,
+                groupValue: useEndDate,
+                title: const Text('Until a date'),
+                onChanged: (v) async {
+                  final picked = await showDatePicker(
+                    context: dialogCtx,
+                    initialDate: tempEnd ?? _date.add(const Duration(days: 90)),
+                    firstDate: _date,
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked != null) setDialogState(() {
+                    tempEnd = picked;
+                    useEndDate = true;
+                  });
+                },
+              ),
+              if (useEndDate)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12),
+                  child: Text(
+                    tempEnd == null ? 'Pick a date above' : 'Ends ${tempEnd!.day}/${tempEnd!.month}/${tempEnd!.year}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: (useEndDate && tempEnd == null)
+                  ? null
+                  : () {
+                      setState(() {
+                        if (useEndDate) {
+                          _recurringEndDate = tempEnd;
+                        } else {
+                          _recurringCount = tempCount;
+                          _recurringEndDate = null;
+                        }
+                      });
+                      Navigator.pop(dialogCtx);
+                    },
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _save() async {
@@ -159,6 +278,7 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
       final yearly = _kind == EntryKind.expense && _isYearly;
 
       final dates = _isRecurring ? _generateRecurringDates(_date, _recurringFrequency) : [_date];
+      final groupId = _isRecurring && dates.length > 1 ? _uuid.v4() : null;
       for (final targetDate in dates) {
         await repo.addTransaction(
           type: type,
@@ -168,6 +288,7 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
           categoryId: _categoryId,
           remark: _remarkCtrl.text.trim(),
           isYearly: yearly,
+          recurringGroupId: groupId,
         );
       }
     }
@@ -232,22 +353,49 @@ return SafeArea(
                   if (_kind == EntryKind.people) ...[
                     _PeopleTypeToggle(type: _peopleType, onChanged: (t) => setState(() => _peopleType = t)),
                     const SizedBox(height: _gap),
-                    SizedBox(
-                      height: _fieldHeight,
-                      child: TextField(
-                        controller: _personCtrl,
-                        readOnly: true, // custom in-sheet keyboard instead of the OS one
-                        decoration: InputDecoration(
-                          labelText: 'Person name',
-                          border: const OutlineInputBorder(),
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                          suffixIcon: _activeField == _ActiveField.person
-                              ? const Icon(Icons.keyboard, size: 18, color: AppColors.accent)
-                              : null,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: _fieldHeight,
+                            child: TextField(
+                              controller: _personCtrl,
+                              readOnly: true, // custom in-sheet keyboard instead of the OS one
+                              decoration: InputDecoration(
+                                labelText: 'Person name',
+                                border: const OutlineInputBorder(),
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                suffixIcon: _activeField == _ActiveField.person
+                                    ? const Icon(Icons.keyboard, size: 18, color: AppColors.accent)
+                                    : null,
+                              ),
+                              onTap: () => setState(() => _activeField = _ActiveField.person),
+                            ),
+                          ),
                         ),
-                        onTap: () => setState(() => _activeField = _ActiveField.person),
-                      ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SizedBox(
+                            height: _fieldHeight,
+                            child: TextField(
+                              controller: _remarkCtrl,
+                              readOnly: true,
+                              decoration: InputDecoration(
+                                labelText: 'Remark',
+                                border: const OutlineInputBorder(),
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                suffixIcon: _activeField == _ActiveField.remark
+                                    ? const Icon(Icons.keyboard, size: 18, color: AppColors.accent)
+                                    : null,
+                              ),
+                              onTap: () => setState(() => _activeField = _ActiveField.remark),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: _gap),
                   ],
@@ -344,14 +492,20 @@ return SafeArea(
                           PopupMenuButton<String>(
                             tooltip: 'Repeat this entry',
                             icon: Icon(Icons.repeat_rounded, color: _isRecurring ? AppColors.accent : Colors.grey, size: 21),
-                            onSelected: (value) => setState(() {
+                            onSelected: (value) {
                               if (value == 'none') {
-                                _isRecurring = false;
+                                setState(() {
+                                  _isRecurring = false;
+                                  _recurringEndDate = null;
+                                });
                               } else {
-                                _isRecurring = true;
-                                _recurringFrequency = value;
+                                setState(() {
+                                  _isRecurring = true;
+                                  _recurringFrequency = value;
+                                });
+                                _configureRecurringRange();
                               }
-                            }),
+                            },
                             itemBuilder: (_) => [
                               _repeatItem('none', 'No repeat', !_isRecurring),
                               _repeatItem('weekly', 'Weekly', _isRecurring && _recurringFrequency == 'weekly'),
@@ -363,6 +517,36 @@ return SafeArea(
                       ],
                     ),
                   ),
+
+                  // ---- Recurring range summary ----
+                  if (_isRecurring) ...[
+                    const SizedBox(height: 8),
+                    InkWell(
+                      onTap: _configureRecurringRange,
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: AppColors.accent.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: AppColors.accent.withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.event_repeat, size: 14, color: AppColors.accent),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Repeats $_recurringFrequency, $_recurringRangeLabel',
+                              style: const TextStyle(fontSize: 11.5, color: AppColors.accent, fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.edit, size: 12, color: AppColors.accent),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
 
 
                   // ---- Input panel (numpad / category grid / account list / keyboard) ----

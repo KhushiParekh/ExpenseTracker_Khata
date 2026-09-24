@@ -28,6 +28,10 @@ class TransactionRepository {
   /// `isYearly` entries are written exactly like any other transaction —
   /// the *filtering* (hiding them from Home tabs) happens at query time,
   /// not at write time, so Statistics can still include them.
+  /// `recurringGroupId` links this row to the batch it was generated with
+  /// (see `_AddTransactionSheetState._save` for how a series is created),
+  /// so the whole series can later be found and its future occurrences
+  /// stopped from the More screen.
   Future<void> addTransaction({
     required String type, // 'expense' | 'income'
     required double amount,
@@ -36,6 +40,7 @@ class TransactionRepository {
     String? categoryId,
     String remark = '',
     bool isYearly = false,
+    String? recurringGroupId,
   }) async {
     await db.into(db.transactions).insert(TransactionsCompanion.insert(
           id: _uuid.v4(),
@@ -46,6 +51,7 @@ class TransactionRepository {
           categoryId: Value(categoryId),
           remark: Value(remark),
           isYearly: Value(isYearly),
+          recurringGroupId: Value(recurringGroupId),
           updatedAt: DateTime.now(),
           pendingSync: const Value(true),
         ));
@@ -112,6 +118,78 @@ class TransactionRepository {
   }
 
   Stream<List<Transaction>> watchDay(DateTime day) => db.watchTransactionsForDay(day);
+
+  // -------------------------------------------------------------------
+  // Recurring series management (More screen -> "Manage recurring")
+  // -------------------------------------------------------------------
+
+  /// One row per distinct recurring series still holding at least one
+  /// future occurrence, used to populate the "active recurring" list.
+  Stream<List<RecurringSeriesInfo>> watchActiveRecurringSeries() {
+    return db.watchAllTransactions().map((rows) {
+      final today = DateTime.now();
+      final todayStart = DateTime(today.year, today.month, today.day);
+      final byGroup = <String, List<Transaction>>{};
+      for (final r in rows) {
+        if (r.recurringGroupId == null) continue;
+        byGroup.putIfAbsent(r.recurringGroupId!, () => []).add(r);
+      }
+
+      final result = <RecurringSeriesInfo>[];
+      byGroup.forEach((groupId, entries) {
+        entries.sort((a, b) => a.txnDate.compareTo(b.txnDate));
+        final future = entries.where((e) => !e.txnDate.isBefore(todayStart)).toList();
+        if (future.isEmpty) return; // series has already fully lapsed
+
+        // Frequency isn't stored explicitly, so it's inferred from the gap
+        // between two occurrences — only needed for a friendly label.
+        String frequency = 'monthly';
+        if (entries.length >= 2) {
+          final gapDays = entries[1].txnDate.difference(entries[0].txnDate).inDays;
+          if (gapDays <= 10) {
+            frequency = 'weekly';
+          } else if (gapDays >= 300) {
+            frequency = 'annually';
+          }
+        }
+
+        final first = entries.first;
+        result.add(RecurringSeriesInfo(
+          groupId: groupId,
+          type: first.type,
+          amount: first.amount,
+          remark: first.remark,
+          categoryId: first.categoryId,
+          frequency: frequency,
+          nextDate: future.first.txnDate,
+          remainingCount: future.length,
+          totalCount: entries.length,
+        ));
+      });
+
+      result.sort((a, b) => a.nextDate.compareTo(b.nextDate));
+      return result;
+    });
+  }
+
+  /// Cancels everything still ahead in a recurring series (today included),
+  /// leaving past occurrences untouched — "stopping" a recurring entry
+  /// should not erase the history it already created.
+  Future<int> stopRecurring(String groupId) async {
+    final today = DateTime.now();
+    final todayStart = DateTime(today.year, today.month, today.day);
+
+    final rows = await (db.select(db.transactions)
+          ..where((t) => t.recurringGroupId.equals(groupId))
+          ..where((t) => t.deleted.equals(false))
+          ..where((t) => t.txnDate.isBiggerOrEqualValue(todayStart)))
+        .get();
+
+    for (final r in rows) {
+      await deleteTransaction(r.id);
+    }
+    return rows.length;
+  }
 
   /// Home tab queries — ALWAYS exclude `isYearly == true` rows,
   /// per spec: yearly-marked expenses never show on Calendar/Monthly/
