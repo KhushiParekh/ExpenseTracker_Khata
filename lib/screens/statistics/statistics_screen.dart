@@ -7,6 +7,7 @@ import '../../providers/app_providers.dart';
 import '../../data/local/app_database.dart';
 import '../../models/models.dart';
 import '../../widgets/stat_charts.dart';
+import '../../widgets/ui_kit.dart';
 
 enum StatsRange { weekly, monthly, annually }
 
@@ -16,6 +17,10 @@ final _statsKindProvider = StateProvider<String>((ref) => 'expense'); // 'expens
 
 /// Unlike the Home tabs, Statistics counts EVERYTHING — including entries
 /// marked as a yearly expense — so this is the true picture of spending.
+///
+/// Layout: Income | Expense tabs → Weekly / Monthly / Annually → period
+/// navigator → category donut → Total + Biggest/Lowest cards → trend chart
+/// → full category list.
 class StatisticsScreen extends ConsumerWidget {
   const StatisticsScreen({super.key});
 
@@ -33,7 +38,7 @@ class StatisticsScreen extends ConsumerWidget {
       case StatsRange.monthly:
         final start = DateTime(anchor.year, anchor.month, 1);
         final end = DateTime(anchor.year, anchor.month + 1, 1).subtract(const Duration(seconds: 1));
-        return (start, end, DateFormat('MMMM yyyy').format(anchor));
+        return (start, end, DateFormat('MMM yyyy').format(anchor));
       case StatsRange.annually:
         return (DateTime(anchor.year, 1, 1), DateTime(anchor.year, 12, 31, 23, 59, 59), '${anchor.year}');
     }
@@ -50,31 +55,29 @@ class StatisticsScreen extends ConsumerWidget {
     }
   }
 
-  /// Buckets matching rows by day (weekly/monthly) or by month (annual),
-  /// keyed by a short display label -- shared by the biggest/lowest
-  /// mini-cards and (conceptually) the trend chart below them.
-  Map<String, double> _bucketAmounts(List<Transaction> rows, DateTime start, DateTime end, StatsRange range) {
-    final result = <String, double>{};
+  /// Sums [rows] into one bucket per day (weekly / monthly) or per month
+  /// (annually). Shared by the trend chart and the Biggest / Lowest card.
+  List<double> _buckets(List<Transaction> rows, DateTime start, DateTime end, StatsRange range) {
     if (range == StatsRange.annually) {
-      final byMonth = List<double>.filled(13, 0);
+      final byMonth = List<double>.filled(12, 0);
       for (final r in rows) {
-        byMonth[r.txnDate.month] += r.amount;
+        byMonth[r.txnDate.month - 1] += r.amount;
       }
-      for (int m = 1; m <= 12; m++) {
-        result[DateFormat.MMM().format(DateTime(start.year, m))] = byMonth[m];
-      }
-    } else {
-      final dayCount = end.difference(start).inDays + 1;
-      for (int i = 0; i < dayCount; i++) {
-        final d = start.add(Duration(days: i));
-        result[DateFormat('d MMM').format(d)] = 0;
-      }
-      for (final r in rows) {
-        final key = DateFormat('d MMM').format(r.txnDate);
-        result[key] = (result[key] ?? 0) + r.amount;
-      }
+      return byMonth;
     }
-    return result;
+    final dayCount = end.difference(start).inDays + 1;
+    final byDay = List<double>.filled(dayCount, 0);
+    final s = DateTime(start.year, start.month, start.day);
+    for (final r in rows) {
+      final idx = DateTime(r.txnDate.year, r.txnDate.month, r.txnDate.day).difference(s).inDays;
+      if (idx >= 0 && idx < dayCount) byDay[idx] += r.amount;
+    }
+    return byDay;
+  }
+
+  String _bucketLabel(int i, DateTime start, StatsRange range) {
+    if (range == StatsRange.annually) return DateFormat.MMM().format(DateTime(start.year, i + 1));
+    return DateFormat('d MMM').format(DateTime(start.year, start.month, start.day + i));
   }
 
   @override
@@ -86,387 +89,299 @@ class StatisticsScreen extends ConsumerWidget {
     final categoriesAsync = ref.watch(allCategoriesProvider);
     final (start, end, label) = _rangeFor(range, anchor);
     final isIncome = kind == 'income';
+    final kindColor = isIncome ? AppColors.incomeGreen : AppColors.expense;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Statistics')),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: SegmentedButton<StatsRange>(
-              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              segments: const [
-                ButtonSegment(value: StatsRange.weekly, label: Text('Weekly')),
-                ButtonSegment(value: StatsRange.monthly, label: Text('Monthly')),
-                ButtonSegment(value: StatsRange.annually, label: Text('Annually')),
-              ],
-              selected: {range},
-              onSelectionChanged: (s) {
-                ref.read(_statsRangeProvider.notifier).state = s.first;
-                ref.read(_statsAnchorProvider.notifier).state = DateTime.now();
-              },
-            ),
-          ),
-
-          // Period navigator, mirroring the Home screen's header.
+          // ---- Income | Expense tabs ----
           Row(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              IconButton(
-                icon: const Icon(Icons.chevron_left),
-                onPressed: () => ref.read(_statsAnchorProvider.notifier).state = _shift(range, anchor, -1),
+              _KindTab(
+                label: 'Income',
+                icon: Icons.arrow_downward_rounded,
+                color: AppColors.incomeGreen,
+                selected: isIncome,
+                onTap: () => ref.read(_statsKindProvider.notifier).state = 'income',
               ),
-              Text(label, style: Theme.of(context).textTheme.titleMedium),
-              IconButton(
-                icon: const Icon(Icons.chevron_right),
-                onPressed: () => ref.read(_statsAnchorProvider.notifier).state = _shift(range, anchor, 1),
+              _KindTab(
+                label: 'Expense',
+                icon: Icons.arrow_upward_rounded,
+                color: AppColors.expense,
+                selected: !isIncome,
+                onTap: () => ref.read(_statsKindProvider.notifier).state = 'expense',
               ),
             ],
           ),
+          const Divider(height: 1),
 
+          // ---- Weekly / Monthly / Annually ----
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: SegmentedButton<String>(
-              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              segments: const [
-                ButtonSegment(value: 'income', label: Text('Income'), icon: Icon(Icons.arrow_downward, size: 15)),
-                ButtonSegment(value: 'expense', label: Text('Expense'), icon: Icon(Icons.arrow_upward, size: 15)),
-              ],
-              selected: {kind},
-              onSelectionChanged: (s) => ref.read(_statsKindProvider.notifier).state = s.first,
-            ),
-          ),
-          const SizedBox(height: 6),
-
-Expanded(
-  child: StreamBuilder<List<Transaction>>(
-    stream: txnRepo.watchStatsTransactionsBetween(
-      start,
-      end,
-    ),
-    builder: (context, snap) {
-      if (snap.connectionState == ConnectionState.waiting) {
-        return const Center(
-          child: CircularProgressIndicator(),
-        );
-      }
-
-      if (snap.hasError) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text(
-              'Statistics error:\n${snap.error}',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        );
-      }
-
-      final rows = snap.data ?? [];
-
-      final matching = rows
-          .where((r) => r.type == kind)
-          .toList();
-
-      final total = matching.fold<double>(
-        0,
-        (sum, transaction) => sum + transaction.amount,
-      );
-
-      final yearlyPortion = matching
-          .where((r) => r.isYearly)
-          .fold<double>(
-            0,
-            (sum, transaction) => sum + transaction.amount,
-          );
-
-      // Categories are only needed for names/icons.
-      // If they are not ready yet, use an empty list temporarily.
-      final categories = categoriesAsync.maybeWhen(
-        data: (value) => value,
-        orElse: () => <Category>[],
-      );
-
-      final slices = txnRepo.categoryBreakdown(
-        matching,
-        categories,
-        kind: kind,
-      );
-
-      final buckets = _bucketAmounts(
-        matching,
-        start,
-        end,
-        range,
-      );
-
-      final nonZero = buckets.entries
-          .where((e) => e.value > 0)
-          .toList();
-
-      MapEntry<String, double>? biggest;
-      MapEntry<String, double>? lowest;
-
-      if (nonZero.isNotEmpty) {
-        biggest = nonZero.reduce(
-          (a, b) => a.value >= b.value ? a : b,
-        );
-
-        lowest = nonZero.reduce(
-          (a, b) => a.value <= b.value ? a : b,
-        );
-      }
-
-      return ListView(
-        padding: const EdgeInsets.only(bottom: 24),
-        children: [
-
-          // =========================================================
-          // BY CATEGORY
-          // =========================================================
-
-          ChartCard(
-            title: 'By category',
-            subtitle: label,
-            height: 180,
-            child: CompactCategoryDonut(
-              slices: slices,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(22)),
+              child: Row(
+                children: [
+                  for (final r in StatsRange.values)
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          ref.read(_statsRangeProvider.notifier).state = r;
+                          ref.read(_statsAnchorProvider.notifier).state = DateTime.now();
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: r == range ? kindColor.withOpacity(0.2) : Colors.transparent,
+                            borderRadius: BorderRadius.circular(19),
+                          ),
+                          child: Text(
+                            const {StatsRange.weekly: 'Weekly', StatsRange.monthly: 'Monthly', StatsRange.annually: 'Annually'}[r]!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: r == range ? kindColor : Colors.grey,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
 
-          // =========================================================
-          // TOTAL + BIGGEST / LOWEST
-          // =========================================================
-
+          // ---- Period navigator ----
           Padding(
-            padding: const EdgeInsets.fromLTRB(
-              12,
-              2,
-              12,
-              4,
-            ),
+            padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
-              crossAxisAlignment:
-                  CrossAxisAlignment.stretch,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-
-                Expanded(
-                  child: _StatMiniCard(
-                    label: isIncome
-                        ? 'Total Income'
-                        : 'Total Expense',
-                    value:
-                        '$kCurrencySymbol${compactAmount(total)}',
-                    color: isIncome
-                        ? AppColors.incomeGreen
-                        : AppColors.expense,
-                    footer:
-                        '${matching.length} transaction${matching.length == 1 ? '' : 's'}'
-                        '${yearlyPortion > 0 ? ' · $kCurrencySymbol${compactAmount(yearlyPortion)} yearly' : ''}',
-                  ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: () => ref.read(_statsAnchorProvider.notifier).state = _shift(range, anchor, -1),
                 ),
-
-                const SizedBox(width: 10),
-
-                Expanded(
-                  child: _StatMiniCard(
-                    label: 'Biggest / Lowest',
-                    value: biggest == null
-                        ? '—'
-                        : '${biggest.key} '
-                            '$kCurrencySymbol'
-                            '${compactAmount(biggest.value)}',
-                    color: AppColors.accent,
-                    footer: lowest == null
-                        ? null
-                        : 'Lowest: ${lowest.key} '
-                            '$kCurrencySymbol'
-                            '${compactAmount(lowest.value)}',
-                  ),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 150),
+                  child: Text(label, textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: () => ref.read(_statsAnchorProvider.notifier).state = _shift(range, anchor, 1),
                 ),
               ],
             ),
           ),
 
-          // =========================================================
-          // TREND
-          // =========================================================
+          Expanded(
+            child: StreamBuilder<List<Transaction>>(
+              stream: txnRepo.watchStatsTransactionsBetween(start, end),
+              builder: (context, snap) {
+                if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+                final rows = snap.data!;
+                final matching = rows.where((r) => r.type == kind).toList();
+                final total = matching.fold(0.0, (a, b) => a + b.amount);
+                final yearlyPortion = matching.where((r) => r.isYearly).fold(0.0, (a, b) => a + b.amount);
 
-          ChartCard(
-            title: range == StatsRange.annually
-                ? 'Month by month'
-                : 'Day by day',
-            subtitle: 'Trend across $label',
-            height: 170,
-            child: _PeriodTrendChart(
-              rows: matching,
-              start: start,
-              end: end,
-              range: range,
-              color: isIncome
-                  ? AppColors.incomeGreen
-                  : AppColors.expense,
+                // Biggest / lowest bucket (day or month) that has any activity.
+                final buckets = _buckets(matching, start, end, range);
+                int? bigIdx, lowIdx;
+                for (int i = 0; i < buckets.length; i++) {
+                  if (buckets[i] <= 0) continue;
+                  if (bigIdx == null || buckets[i] > buckets[bigIdx]) bigIdx = i;
+                  if (lowIdx == null || buckets[i] < buckets[lowIdx]) lowIdx = i;
+                }
+                final int? big = bigIdx;
+                final int? low = lowIdx;
+
+                return categoriesAsync.when(
+                  data: (categories) {
+                    final slices = txnRepo.categoryBreakdown(rows, categories, kind: kind);
+
+                    return ListView(
+                      padding: const EdgeInsets.only(bottom: 24),
+                      children: [
+                        // ---- By category ----
+                        ChartCard(
+                          title: 'By category',
+                          subtitle: label,
+                          height: 180,
+                          child: CompactCategoryDonut(slices: slices),
+                        ),
+
+                        // ---- Total + Biggest / Lowest ----
+                        TwoUp(
+                          left: StatCard(
+                            label: 'Total ${isIncome ? 'income' : 'expense'}',
+                            value: fmtMoney(total),
+                            color: kindColor,
+                            icon: isIncome ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded,
+                            subtitle: '${matching.length} transaction${matching.length == 1 ? '' : 's'}'
+                                '${yearlyPortion > 0 ? ' · ${compactAmount(yearlyPortion)} yearly' : ''}',
+                          ),
+                          right: AppCard(
+                            margin: EdgeInsets.zero,
+                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                _extremeLine(
+                                  'Biggest ${isIncome ? 'income' : 'expense'}',
+                                  big == null ? '—' : '${_bucketLabel(big, start, range)} · ${fmtMoney(buckets[big])}',
+                                  kindColor,
+                                ),
+                                const SizedBox(height: 10),
+                                _extremeLine(
+                                  'Lowest ${isIncome ? 'income' : 'expense'}',
+                                  low == null ? '—' : '${_bucketLabel(low, start, range)} · ${fmtMoney(buckets[low])}',
+                                  Colors.grey.shade300,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        // ---- Trend within the period ----
+                        ChartCard(
+                          title: range == StatsRange.annually ? 'Month by month' : 'Day by day',
+                          subtitle: 'Trend across $label',
+                          height: 170,
+                          child: _PeriodTrendChart(
+                            rows: matching,
+                            start: start,
+                            end: end,
+                            range: range,
+                            color: kindColor,
+                          ),
+                        ),
+
+                        // ---- Full category list ----
+                        if (slices.isNotEmpty) ...[
+                          const SectionTitle('All categories'),
+                          AppCard(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Column(
+                              children: [
+                                for (int i = 0; i < slices.length; i++) ...[
+                                  if (i > 0) const Divider(height: 1, indent: 60, endIndent: 14),
+                                  _categoryRow(slices[i], i),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    );
+                  },
+                  loading: () => const Center(child: CircularProgressIndicator()),
+                  error: (e, _) => Center(child: Text('$e')),
+                );
+              },
             ),
           ),
+        ],
+      ),
+    );
+  }
 
-          // =========================================================
-          // ALL CATEGORIES
-          // =========================================================
-
-          if (slices.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                12,
-                16,
-                6,
-              ),
-              child: Text(
-                'All categories',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-
-            const Divider(height: 1),
-
-            ...slices.map(
-              (s) => ListTile(
-                dense: true,
-                leading: Text(
-                  s.icon,
-                  style: const TextStyle(
-                    fontSize: 18,
-                  ),
-                ),
-                title: Text(
-                  s.name,
-                  style: const TextStyle(
-                    fontSize: 14,
-                  ),
-                ),
-                subtitle: LinearProgressIndicator(
-                  value: (s.percent / 100).clamp(0, 1),
-                  minHeight: 3,
-                  backgroundColor: Colors.white10,
-                  valueColor:
-                      AlwaysStoppedAnimation(
-                    isIncome
-                        ? AppColors.incomeGreen
-                        : AppColors.expense,
-                  ),
-                ),
-                trailing: Column(
-                  mainAxisAlignment:
-                      MainAxisAlignment.center,
-                  crossAxisAlignment:
-                      CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      '$kCurrencySymbol${s.amount.toStringAsFixed(0)}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                    Text(
-                      '${s.percent.toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-
-          // =========================================================
-          // NO TRANSACTIONS
-          // =========================================================
-
-          if (rows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(
-                top: 20,
-                left: 20,
-                right: 20,
-              ),
-              child: Center(
-                child: Text(
-                  'No transactions recorded for this period.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.grey,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ),
-
-          if (rows.isNotEmpty && matching.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(
-                top: 20,
-                left: 20,
-                right: 20,
-              ),
-              child: Center(
-                child: Text(
-                  isIncome
-                      ? 'No income transactions for this period.'
-                      : 'No expense transactions for this period.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.grey,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ),
+  Widget _extremeLine(String label, String value, Color valueColor) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 10.5, color: Colors.grey)),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: valueColor)),
+          ),
         ],
       );
-    },
-  ),
-),
+
+  Widget _categoryRow(CategorySlice s, int index) {
+    // Same colours as the donut: top six get palette colours, the rest grey.
+    final color = index < 6 ? AppColors.chartPalette[index % AppColors.chartPalette.length] : Colors.grey.shade600;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: color.withOpacity(0.16), borderRadius: BorderRadius.circular(10)),
+            child: Text(s.icon, style: const TextStyle(fontSize: 18)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: (s.percent / 100).clamp(0.0, 1.0),
+                    minHeight: 5,
+                    backgroundColor: Colors.white10,
+                    valueColor: AlwaysStoppedAnimation(color),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(fmtMoney(s.amount), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5)),
+              const SizedBox(height: 2),
+              Text('${s.percent.toStringAsFixed(0)}%', style: const TextStyle(fontSize: 10.5, color: Colors.grey)),
+            ],
+          ),
         ],
       ),
     );
   }
 }
 
-class _StatMiniCard extends StatelessWidget {
+/// One half of the Income | Expense tab strip, with an underline indicator.
+class _KindTab extends StatelessWidget {
   final String label;
-  final String value;
+  final IconData icon;
   final Color color;
-  final String? footer;
-  const _StatMiniCard({required this.label, required this.value, required this.color, this.footer});
+  final bool selected;
+  final VoidCallback onTap;
+  const _KindTab({required this.label, required this.icon, required this.color, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.28)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 10.5, color: Colors.grey), maxLines: 1, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 5),
-          Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: color), maxLines: 1, overflow: TextOverflow.ellipsis),
-          if (footer != null) ...[
-            const SizedBox(height: 4),
-            Text(footer!, style: const TextStyle(fontSize: 10, color: Colors.grey), maxLines: 1, overflow: TextOverflow.ellipsis),
-          ],
-        ],
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: selected ? color : Colors.transparent, width: 2.5)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 17, color: selected ? color : Colors.grey),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: selected ? color : Colors.grey),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

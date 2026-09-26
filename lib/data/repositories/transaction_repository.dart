@@ -28,10 +28,6 @@ class TransactionRepository {
   /// `isYearly` entries are written exactly like any other transaction —
   /// the *filtering* (hiding them from Home tabs) happens at query time,
   /// not at write time, so Statistics can still include them.
-  /// `recurringGroupId` links this row to the batch it was generated with
-  /// (see `_AddTransactionSheetState._save` for how a series is created),
-  /// so the whole series can later be found and its future occurrences
-  /// stopped from the More screen.
   Future<void> addTransaction({
     required String type, // 'expense' | 'income'
     required double amount,
@@ -40,7 +36,11 @@ class TransactionRepository {
     String? categoryId,
     String remark = '',
     bool isYearly = false,
+    // Set together, and only when this call is one occurrence of a
+    // multi-occurrence "repeat this entry" series — see
+    // AddTransactionSheet._save and [stopRecurring].
     String? recurringGroupId,
+    String? recurringFrequency,
   }) async {
     await db.into(db.transactions).insert(TransactionsCompanion.insert(
           id: _uuid.v4(),
@@ -52,6 +52,7 @@ class TransactionRepository {
           remark: Value(remark),
           isYearly: Value(isYearly),
           recurringGroupId: Value(recurringGroupId),
+          recurringFrequency: Value(recurringFrequency),
           updatedAt: DateTime.now(),
           pendingSync: const Value(true),
         ));
@@ -119,78 +120,6 @@ class TransactionRepository {
 
   Stream<List<Transaction>> watchDay(DateTime day) => db.watchTransactionsForDay(day);
 
-  // -------------------------------------------------------------------
-  // Recurring series management (More screen -> "Manage recurring")
-  // -------------------------------------------------------------------
-
-  /// One row per distinct recurring series still holding at least one
-  /// future occurrence, used to populate the "active recurring" list.
-  Stream<List<RecurringSeriesInfo>> watchActiveRecurringSeries() {
-    return db.watchAllTransactions().map((rows) {
-      final today = DateTime.now();
-      final todayStart = DateTime(today.year, today.month, today.day);
-      final byGroup = <String, List<Transaction>>{};
-      for (final r in rows) {
-        if (r.recurringGroupId == null) continue;
-        byGroup.putIfAbsent(r.recurringGroupId!, () => []).add(r);
-      }
-
-      final result = <RecurringSeriesInfo>[];
-      byGroup.forEach((groupId, entries) {
-        entries.sort((a, b) => a.txnDate.compareTo(b.txnDate));
-        final future = entries.where((e) => !e.txnDate.isBefore(todayStart)).toList();
-        if (future.isEmpty) return; // series has already fully lapsed
-
-        // Frequency isn't stored explicitly, so it's inferred from the gap
-        // between two occurrences — only needed for a friendly label.
-        String frequency = 'monthly';
-        if (entries.length >= 2) {
-          final gapDays = entries[1].txnDate.difference(entries[0].txnDate).inDays;
-          if (gapDays <= 10) {
-            frequency = 'weekly';
-          } else if (gapDays >= 300) {
-            frequency = 'annually';
-          }
-        }
-
-        final first = entries.first;
-        result.add(RecurringSeriesInfo(
-          groupId: groupId,
-          type: first.type,
-          amount: first.amount,
-          remark: first.remark,
-          categoryId: first.categoryId,
-          frequency: frequency,
-          nextDate: future.first.txnDate,
-          remainingCount: future.length,
-          totalCount: entries.length,
-        ));
-      });
-
-      result.sort((a, b) => a.nextDate.compareTo(b.nextDate));
-      return result;
-    });
-  }
-
-  /// Cancels everything still ahead in a recurring series (today included),
-  /// leaving past occurrences untouched — "stopping" a recurring entry
-  /// should not erase the history it already created.
-  Future<int> stopRecurring(String groupId) async {
-    final today = DateTime.now();
-    final todayStart = DateTime(today.year, today.month, today.day);
-
-    final rows = await (db.select(db.transactions)
-          ..where((t) => t.recurringGroupId.equals(groupId))
-          ..where((t) => t.deleted.equals(false))
-          ..where((t) => t.txnDate.isBiggerOrEqualValue(todayStart)))
-        .get();
-
-    for (final r in rows) {
-      await deleteTransaction(r.id);
-    }
-    return rows.length;
-  }
-
   /// Home tab queries — ALWAYS exclude `isYearly == true` rows,
   /// per spec: yearly-marked expenses never show on Calendar/Monthly/
   /// Yearly/Total, only in Statistics.
@@ -222,6 +151,69 @@ class TransactionRepository {
     return db.watchYearlyMarkedTransactionsBetween(start, end);
   }
 
+  // ---- Recurring series --------------------------------------------
+  // A series is just N ordinary Transaction rows that share one
+  // `recurringGroupId` (assigned once, when they're all created together
+  // — see AddTransactionSheet._save). There's no separate "series" table:
+  // membership, frequency, and how many are left are all derived here from
+  // the rows themselves, so a stopped/edited/deleted row is automatically
+  // reflected with no extra bookkeeping.
+
+  /// Every recurring series that still has at least one occurrence dated
+  /// today or later, newest-next first. Powers the "Recurring Transactions"
+  /// card in More, where each series can be reviewed and stopped.
+  Stream<List<RecurringSeriesInfo>> watchActiveRecurringSeries() {
+    return db.watchRecurringTransactions().map((rows) {
+      final today = DateTime.now();
+      final startOfToday = DateTime(today.year, today.month, today.day);
+
+      final byGroup = <String, List<Transaction>>{};
+      for (final r in rows) {
+        final gid = r.recurringGroupId;
+        if (gid == null) continue;
+        byGroup.putIfAbsent(gid, () => []).add(r);
+      }
+
+      final result = <RecurringSeriesInfo>[];
+      for (final entry in byGroup.entries) {
+        final series = entry.value..sort((a, b) => a.txnDate.compareTo(b.txnDate));
+        final upcoming = series.where((r) => !r.txnDate.isBefore(startOfToday)).toList();
+        if (upcoming.isEmpty) continue; // fully in the past, or fully stopped
+        final first = series.first;
+        result.add(RecurringSeriesInfo(
+          groupId: entry.key,
+          type: first.type,
+          categoryId: first.categoryId,
+          remark: first.remark,
+          frequency: first.recurringFrequency ?? 'monthly',
+          nextDate: upcoming.first.txnDate,
+          remainingCount: upcoming.length,
+          totalCount: series.length,
+          amount: first.amount,
+        ));
+      }
+      result.sort((a, b) => a.nextDate.compareTo(b.nextDate));
+      return result;
+    });
+  }
+
+  /// Cancels every occurrence of series [groupId] dated today or later.
+  /// Occurrences already in the past are untouched — they already
+  /// happened and stay in the ledger. Returns how many were cancelled.
+  Future<int> stopRecurring(String groupId) async {
+    final today = DateTime.now();
+    final startOfToday = DateTime(today.year, today.month, today.day);
+    final upcoming = await (db.select(db.transactions)
+          ..where((t) => t.recurringGroupId.equals(groupId))
+          ..where((t) => t.deleted.equals(false))
+          ..where((t) => t.txnDate.isBiggerOrEqualValue(startOfToday)))
+        .get();
+    for (final row in upcoming) {
+      await deleteTransaction(row.id); // soft-delete + reverse its balance effect
+    }
+    return upcoming.length;
+  }
+
   List<CategorySlice> categoryBreakdown(
     List<Transaction> rows,
     List<Category> categories, {
@@ -244,4 +236,28 @@ class TransactionRepository {
       ..sort((a, b) => b.amount.compareTo(a.amount));
     return slices;
   }
+    /// Lifetime income vs expense totals per account, keyed by accountId.
+  /// Powers the small colour indicator on the Accounts screen (see
+  /// AccountsScreen._IncomeExpenseBars) — deliberately not date-scoped,
+  /// it's an at-a-glance signal, not a report.
+  Stream<Map<String, ({double income, double expense})>> watchIncomeExpenseByAccount() {
+    return db.watchAllTransactions().map((rows) {
+      final map = <String, ({double income, double expense})>{};
+      for (final r in rows) {
+        final accId = r.accountId;
+        if (accId == null) continue;
+        final cur = map[accId] ?? (income: 0.0, expense: 0.0);
+        if (r.type == 'income') {
+          map[accId] = (income: cur.income + r.amount, expense: cur.expense);
+        } else if (r.type == 'expense') {
+          map[accId] = (income: cur.income, expense: cur.expense + r.amount);
+        }
+      }
+      return map;
+    });
+  }
 }
+
+
+
+

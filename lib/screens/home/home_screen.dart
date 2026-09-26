@@ -51,6 +51,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
     final focused = ref.watch(focusedMonthProvider);
     final selectedDate = ref.watch(selectedDateProvider);
 
+    // Lets other tabs switch sub-tab (e.g. tapping a month in Monthly opens
+    // that month in Calendar) just by setting homeTabIndexProvider.
+    ref.listen<int>(homeTabIndexProvider, (previous, next) {
+      if (_tabController.index != next) _tabController.animateTo(next);
+    });
+
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 52,

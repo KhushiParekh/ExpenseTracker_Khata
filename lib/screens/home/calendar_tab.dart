@@ -5,12 +5,15 @@ import '../../core/constants.dart';
 import '../../providers/app_providers.dart';
 import '../../widgets/add_transaction_modal.dart';
 import '../../widgets/day_detail_sheet.dart';
+import '../../widgets/stat_charts.dart' show compactAmount;
+import '../../widgets/ui_kit.dart';
 import '../../data/repositories/home_totals_repository.dart';
 import '../../data/local/app_database.dart';
-import '../../widgets/stat_charts.dart';
 
 class CalendarTab extends ConsumerWidget {
   const CalendarTab({super.key});
+
+  static const _sundayRed = Color(0xFFFF5A6E);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -20,316 +23,211 @@ class CalendarTab extends ConsumerWidget {
     final peopleRepo = ref.watch(peopleRepoProvider);
 
     return ListView(
-      padding: const EdgeInsets.only(bottom: 90),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 96),
       children: [
-        // ---- 1. Income + Expense cards ----
-StreamBuilder<PeriodTotals>(
-  stream: totalsRepo.watchTotalsForMonth(
-    focused.year,
-    focused.month,
-  ),
-  builder: (context, totalsSnap) {
-    final t = totalsSnap.data ?? PeriodTotals.zero;
+        // ---- 1. Four summary cards: Income, Expense, Net savings, People ----
+        StreamBuilder<PeriodTotals>(
+          stream: totalsRepo.watchTotalsForMonth(focused.year, focused.month),
+          builder: (context, totalsSnap) {
+            final t = totalsSnap.data ?? PeriodTotals.zero;
+            return StreamBuilder<List<PeopleEntry>>(
+              stream: peopleRepo.watchEntriesForMonth(focused.year, focused.month),
+              builder: (context, peopleSnap) {
+                final entries = peopleSnap.data ?? const <PeopleEntry>[];
+                final borrowedOut = entries.where((e) => e.type == 'borrowed' && !e.settled).fold(0.0, (a, b) => a + b.amount);
+                final lentOut = entries.where((e) => e.type == 'lent' && !e.settled).fold(0.0, (a, b) => a + b.amount);
+                final net = t.total;
+                final rate = t.income > 0 ? '${(net / t.income * 100).round()}% of income' : 'Income - Expense';
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: _SummaryCard(
-              label: 'Income',
-              value: t.income,
-              color: AppColors.incomeGreen,
-              icon: Icons.arrow_downward_rounded,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _SummaryCard(
-              label: 'Expense',
-              value: t.expense,
-              color: AppColors.expense,
-              icon: Icons.arrow_upward_rounded,
-            ),
-          ),
-        ],
-      ),
-    );
-  },
-),
-
-// ---- 2. Legend ----
-Padding(
-  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-  child: Wrap(
-    spacing: 16,
-    runSpacing: 4,
-    children: [
-      _legendDot(AppColors.incomeGreen, 'Income'),
-      _legendDot(AppColors.expense, 'Expense'),
-      _legendDot(AppColors.borrowedLent, 'Borrowed / Lent'),
-    ],
-  ),
-),
-
-// ---- 3. Calendar grid ----
-Container(
-  margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-  decoration: BoxDecoration(
-    color: AppColors.surface.withOpacity(0.5),
-    borderRadius: BorderRadius.circular(16),
-    border: Border.all(color: Colors.white10),
-  ),
-  padding: const EdgeInsets.fromLTRB(6, 10, 6, 6),
-  child: StreamBuilder<Map<int, PeriodTotals>>(
-    stream: totalsRepo.watchDailyTotalsForMonth(
-      focused.year,
-      focused.month,
-    ),
-    builder: (context, dailySnap) {
-      return StreamBuilder<Map<int, double>>(
-        stream: totalsRepo.watchPendingPeopleNetForMonth(
-          focused.year,
-          focused.month,
-        ),
-        builder: (context, pendingSnap) {
-          final dayTotals = dailySnap.data ?? {};
-          final pending = pendingSnap.data ?? {};
-
-          return TableCalendar(
-            firstDay: DateTime(2015, 1, 1),
-            lastDay: DateTime(2100, 12, 31),
-            focusedDay: focused,
-            currentDay: DateTime.now(),
-            selectedDayPredicate: (d) => isSameDay(d, selected),
-            calendarFormat: CalendarFormat.month,
-            rowHeight: 76,
-            daysOfWeekHeight: 26,
-            headerVisible: false,
-            sixWeekMonthsEnforced: false,
-            calendarStyle: const CalendarStyle(
-              outsideDaysVisible: true,
-              cellMargin: EdgeInsets.all(2),
-            ),
-            daysOfWeekStyle: const DaysOfWeekStyle(
-              weekdayStyle: TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.bold,
-                fontSize: 12.5,
-              ),
-              weekendStyle: TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.bold,
-                fontSize: 12.5,
-              ),
-            ),
-            onPageChanged: (focusedDay) {
-              ref.read(focusedMonthProvider.notifier).state =
-                  DateTime(focusedDay.year, focusedDay.month);
-            },
-            onDaySelected: (selectedDay, focusedDay) {
-              ref.read(selectedDateProvider.notifier).state = selectedDay;
-              showAddTransactionModal(context, ref, selectedDay);
-            },
-            calendarBuilders: CalendarBuilders(
-              dowBuilder: (context, day) {
-                final isSunday = day.weekday == DateTime.sunday;
-
-                return Center(
-                  child: Text(
-                    const [
-                      'Mon',
-                      'Tue',
-                      'Wed',
-                      'Thu',
-                      'Fri',
-                      'Sat',
-                      'Sun',
-                    ][day.weekday - 1],
-                    style: TextStyle(
-                      color: isSunday
-                          ? const Color(0xFFFF5A6E)
-                          : Colors.white70,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12.5,
+                return Column(
+                  children: [
+                    TwoUp(
+                      left: StatCard(
+                        label: 'Income',
+                        value: fmtMoney(t.income),
+                        color: AppColors.incomeGreen,
+                        icon: Icons.arrow_downward_rounded,
+                      ),
+                      right: StatCard(
+                        label: 'Expense',
+                        value: fmtMoney(t.expense),
+                        color: AppColors.expense,
+                        icon: Icons.arrow_upward_rounded,
+                      ),
                     ),
-                  ),
+                    TwoUp(
+                      left: StatCard(
+                        label: 'Net savings',
+                        value: fmtMoney(net),
+                        color: net >= 0 ? AppColors.incomeGreen : AppColors.expense,
+                        icon: Icons.savings_outlined,
+                        subtitle: rate,
+                      ),
+                      right: StatCard(
+                        label: 'Borrowed / Lent',
+                        value: fmtSigned(borrowedOut - lentOut),
+                        color: AppColors.borrowedLent,
+                        icon: Icons.people_alt_outlined,
+                        subtitle: 'In ${compactAmount(borrowedOut)} · Out ${compactAmount(lentOut)}',
+                      ),
+                    ),
+                  ],
                 );
               },
-              defaultBuilder: (context, day, focusedDay) =>
-                  _dayCell(
-                context,
-                ref,
-                day,
-                dayTotals[day.day],
-                pending[day.day] ?? 0,
+            );
+          },
+        ),
+
+        const SizedBox(height: 6),
+
+        // ---- 2. Calendar grid ----
+        AppCard(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 10),
+          child: Column(
+            children: [
+              StreamBuilder<Map<int, PeriodTotals>>(
+                stream: totalsRepo.watchDailyTotalsForMonth(focused.year, focused.month),
+                builder: (context, dailySnap) {
+                  return StreamBuilder<Map<int, double>>(
+                    stream: totalsRepo.watchPendingPeopleNetForMonth(focused.year, focused.month),
+                    builder: (context, pendingSnap) {
+                      final dayTotals = dailySnap.data ?? {};
+                      final pending = pendingSnap.data ?? {};
+                      final now = DateTime.now();
+
+                      return TableCalendar(
+                        firstDay: DateTime(2015, 1, 1),
+                        lastDay: DateTime(2100, 12, 31),
+                        focusedDay: focused,
+                        currentDay: now,
+                        selectedDayPredicate: (d) => isSameDay(d, selected),
+                        calendarFormat: CalendarFormat.month,
+                        rowHeight: 74,
+                        daysOfWeekHeight: 28,
+                        headerVisible: false, // shared nav lives in HomeScreen's AppBar
+                        sixWeekMonthsEnforced: false,
+                        calendarStyle: const CalendarStyle(outsideDaysVisible: true),
+                        onPageChanged: (focusedDay) {
+                          ref.read(focusedMonthProvider.notifier).state = DateTime(focusedDay.year, focusedDay.month);
+                        },
+                        onDaySelected: (selectedDay, focusedDay) {
+                          ref.read(selectedDateProvider.notifier).state = selectedDay;
+                          showAddTransactionModal(context, ref, selectedDay);
+                        },
+                        calendarBuilders: CalendarBuilders(
+                          dowBuilder: (context, day) {
+                            final isSunday = day.weekday == DateTime.sunday;
+                            return Center(
+                              child: Text(
+                                const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][day.weekday - 1],
+                                style: TextStyle(
+                                  color: isSunday ? _sundayRed : Colors.grey.shade400,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            );
+                          },
+                          defaultBuilder: (context, day, _) =>
+                              _dayCell(context, ref, day, dayTotals[day.day], pending[day.day] ?? 0),
+                          todayBuilder: (context, day, _) =>
+                              _dayCell(context, ref, day, dayTotals[day.day], pending[day.day] ?? 0, isToday: true),
+                          // A selected day that is ALSO today keeps its "today" ring.
+                          selectedBuilder: (context, day, _) => _dayCell(
+                            context, ref, day, dayTotals[day.day], pending[day.day] ?? 0,
+                            isSelected: true,
+                            isToday: isSameDay(day, now),
+                          ),
+                          outsideBuilder: (context, day, _) => _dayCell(context, ref, day, null, 0, isOutside: true),
+                        ),
+                      );
+                    },
+                  );
+                },
               ),
-              todayBuilder: (context, day, focusedDay) =>
-                  _dayCell(
-                context,
-                ref,
-                day,
-                dayTotals[day.day],
-                pending[day.day] ?? 0,
-                isToday: true,
+              const SizedBox(height: 8),
+              const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _LegendDot(color: AppColors.incomeGreen, label: 'Income'),
+                  SizedBox(width: 14),
+                  _LegendDot(color: AppColors.expense, label: 'Expense'),
+                  SizedBox(width: 14),
+                  _LegendDot(color: AppColors.borrowedLent, label: 'People'),
+                ],
               ),
-              selectedBuilder: (context, day, focusedDay) =>
-                  _dayCell(
-                context,
-                ref,
-                day,
-                dayTotals[day.day],
-                pending[day.day] ?? 0,
-                isSelected: true,
-              ),
-              outsideBuilder: (context, day, focusedDay) =>
-                  _dayCell(
-                context,
-                ref,
-                day,
-                null,
-                0,
-                isOutside: true,
-              ),
-            ),
-          );
-        },
-      );
-    },
-  ),
-),
-
-// ---- 4. Net Savings + Savings Rate ----
-StreamBuilder<PeriodTotals>(
-  stream: totalsRepo.watchTotalsForMonth(
-    focused.year,
-    focused.month,
-  ),
-  builder: (context, totalsSnap) {
-    final t = totalsSnap.data ?? PeriodTotals.zero;
-
-    final savingsRate = t.income > 0
-        ? (t.total / t.income) * 100
-        : 0.0;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: _SummaryCard(
-              label: 'Net Savings',
-              value: t.total,
-              color: t.total >= 0
-                  ? AppColors.incomeGreen
-                  : AppColors.expense,
-              icon: Icons.savings_outlined,
-            ),
+            ],
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _PercentageCard(
-              label: 'Savings Rate',
-              value: savingsRate,
-              icon: Icons.trending_up_rounded,
-              color: savingsRate >= 0
-                  ? AppColors.incomeGreen
-                  : AppColors.expense,
-            ),
+        ),
+
+        const Padding(
+          padding: EdgeInsets.only(top: 4),
+          child: Text(
+            'Tap a date to add  ·  Long-press to see its entries',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11, color: Colors.grey),
           ),
-        ],
-      ),
-    );
-  },
-),
-
-// ---- 5. Lent + Borrowed ----
-StreamBuilder<List<PeopleEntry>>(
-  stream: peopleRepo.watchEntriesForMonth(
-    focused.year,
-    focused.month,
-  ),
-  builder: (context, peopleSnap) {
-    final entries = peopleSnap.data ?? [];
-
-    final borrowed = entries
-        .where((e) => e.type == 'borrowed' && !e.settled)
-        .fold<double>(0.0, (sum, e) => sum + e.amount);
-
-    final lent = entries
-        .where((e) => e.type == 'lent' && !e.settled)
-        .fold<double>(0.0, (sum, e) => sum + e.amount);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: _SummaryCard(
-              label: 'Lent',
-              value: lent,
-              color: AppColors.borrowedLent,
-              icon: Icons.arrow_outward_rounded,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _SummaryCard(
-              label: 'Borrowed',
-              value: borrowed,
-              color: AppColors.borrowedLent,
-              icon: Icons.arrow_downward_rounded,
-            ),
-          ),
-        ],
-      ),
-    );
-  },
-),
-
-      ]
-    );
-  }
-
-  Widget _legendDot(Color color, String label) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        const SizedBox(width: 5),
-        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+        ),
       ],
     );
   }
 
-  Widget _dayCell(BuildContext context, WidgetRef ref, DateTime day, PeriodTotals? totals, double pending, {bool isToday = false, bool isSelected = false, bool isOutside = false}) {
+  Widget _dayCell(
+    BuildContext context,
+    WidgetRef ref,
+    DateTime day,
+    PeriodTotals? totals,
+    double pending, {
+    bool isToday = false,
+    bool isSelected = false,
+    bool isOutside = false,
+  }) {
     final isSunday = day.weekday == DateTime.sunday;
     final hasIncome = totals != null && totals.income != 0;
     final hasExpense = totals != null && totals.expense != 0;
 
-    Color dayNumberColor;
+    Color numberColor;
     if (isOutside) {
-      dayNumberColor = Colors.grey.shade700;
+      numberColor = Colors.grey.shade700;
     } else if (isSunday) {
-      dayNumberColor = const Color(0xFFFF5A6E);
+      numberColor = _sundayRed;
     } else {
-      dayNumberColor = Colors.white;
+      numberColor = Colors.white;
     }
 
+    Color? bg;
+    BoxBorder? border;
+    if (isOutside) {
+      bg = null;
+    } else if (isToday) {
+      bg = AppColors.accent.withOpacity(isSelected ? 0.22 : 0.13);
+      border = Border.all(color: AppColors.accent, width: 1.5);
+    } else if (isSelected) {
+      bg = Colors.white.withOpacity(0.10);
+      border = Border.all(color: Colors.white38);
+    } else {
+      bg = Colors.white.withOpacity(0.03);
+    }
+
+    Widget amountLine(String text, Color color) => Padding(
+          padding: const EdgeInsets.only(top: 1),
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.clip,
+            style: TextStyle(fontSize: 9.5, color: color, fontWeight: FontWeight.w700, height: 1.15),
+          ),
+        );
+
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onLongPress: isOutside ? null : () => showDayDetailSheet(context, ref, day),
       child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          border: isToday
-              ? Border.all(color: AppColors.accent, width: 1.4)
-              : Border.all(color: Colors.white10, width: 0.5),
-          color: isSelected
-              ? Colors.white10
-              : (isToday ? AppColors.accent.withOpacity(0.12) : null),
-        ),
-        padding: const EdgeInsets.fromLTRB(5, 3, 2, 2),
+        margin: const EdgeInsets.all(1.5),
+        padding: const EdgeInsets.fromLTRB(4, 3, 2, 2),
         alignment: Alignment.topLeft,
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(9), border: border),
         child: SingleChildScrollView(
           physics: const NeverScrollableScrollPhysics(),
           child: Column(
@@ -337,33 +235,22 @@ StreamBuilder<List<PeopleEntry>>(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 20,
-                height: 20,
+                width: 21,
+                height: 21,
                 alignment: Alignment.center,
                 decoration: isToday ? const BoxDecoration(shape: BoxShape.circle, color: AppColors.accent) : null,
                 child: Text(
                   '${day.day}',
-                  style: TextStyle(fontSize: 12, color: isToday ? Colors.white : dayNumberColor, fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: isToday ? Colors.white : numberColor,
+                    fontWeight: isToday ? FontWeight.w800 : FontWeight.w600,
+                  ),
                 ),
               ),
-              if (hasIncome)
-                Text(
-                  '+${compactAmount(totals!.income)}',
-                  maxLines: 1,
-                  style: const TextStyle(fontSize: 9.5, color: AppColors.incomeGreen, fontWeight: FontWeight.w600),
-                ),
-              if (hasExpense)
-                Text(
-                  '-${compactAmount(totals!.expense)}',
-                  maxLines: 1,
-                  style: const TextStyle(fontSize: 9.5, color: AppColors.expense, fontWeight: FontWeight.w600),
-                ),
-              if (pending != 0)
-                Text(
-                  pending > 0 ? '+${compactAmount(pending)}' : '-${compactAmount(pending.abs())}',
-                  maxLines: 1,
-                  style: const TextStyle(fontSize: 9.5, color: AppColors.borrowedLent, fontWeight: FontWeight.w600),
-                ),
+              if (hasIncome) amountLine(compactAmount(totals.income), AppColors.incomeGreen),
+              if (hasExpense) amountLine('-${compactAmount(totals.expense)}', AppColors.expense),
+              if (pending != 0) amountLine(pending > 0 ? '+${compactAmount(pending)}' : compactAmount(pending), AppColors.borrowedLent),
             ],
           ),
         ),
@@ -372,132 +259,20 @@ StreamBuilder<List<PeopleEntry>>(
   }
 }
 
-class _SummaryCard extends StatelessWidget {
-  final String label;
-  final double value;
+class _LegendDot extends StatelessWidget {
   final Color color;
-  final IconData icon;
-  final bool showSign;
-
-  const _SummaryCard({
-    required this.label,
-    required this.value,
-    required this.color,
-    required this.icon,
-    this.showSign = false,
-  });
+  final String label;
+  const _LegendDot({required this.color, required this.label});
 
   @override
   Widget build(BuildContext context) {
-    final sign = showSign && value != 0 ? (value > 0 ? '+' : '-') : '';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.28)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-            child: Icon(icon, size: 18, color: color),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(label, style: const TextStyle(fontSize: 10.5, color: Colors.grey), maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 2),
-                Text(
-                  '$sign$kCurrencySymbol${compactAmount(value.abs())}',
-                  style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.bold, color: color),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-class _PercentageCard extends StatelessWidget {
-  final String label;
-  final double value;
-  final Color color;
-  final IconData icon;
-
-  const _PercentageCard({
-    required this.label,
-    required this.value,
-    required this.color,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 14,
-        vertical: 10,
-      ),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: color.withOpacity(0.28),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              icon,
-              size: 18,
-              color: color,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 10.5,
-                    color: Colors.grey,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${value.toStringAsFixed(1)}%',
-                  style: TextStyle(
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 5),
+        Text(label, style: const TextStyle(fontSize: 10.5, color: Colors.grey)),
+      ],
     );
   }
 }

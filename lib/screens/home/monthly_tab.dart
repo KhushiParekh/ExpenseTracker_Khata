@@ -5,238 +5,347 @@ import '../../core/constants.dart';
 import '../../providers/app_providers.dart';
 import '../../models/models.dart';
 import '../../data/local/app_database.dart';
+import '../../data/repositories/transaction_repository.dart';
 import '../../widgets/stat_charts.dart';
-
-final _heroKindProvider = StateProvider<String>((ref) => 'expense'); // 'income' | 'expense'
+import '../../widgets/ui_kit.dart';
 
 /// Month-by-month view of the focused year. Yearly-marked expenses are
 /// deliberately excluded here (they live in the Yearly tab), so these
 /// figures reflect regular, recurring monthly spending only.
-class MonthlyTab extends ConsumerWidget {
+///
+/// Layout (top → bottom):
+///   1. The "featured" month (this month for the current year) with
+///      Income / Expense cards and a category donut.
+///   2. Earlier months, newest first.
+///   3. Year at a glance (totals + insights).
+///   4. Charts: Income vs Expense, Cumulative, Where it went.
+class MonthlyTab extends ConsumerStatefulWidget {
   const MonthlyTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MonthlyTab> createState() => _MonthlyTabState();
+}
+
+class _MonthlyTabState extends ConsumerState<MonthlyTab> {
+  /// Which side of the featured month the donut is showing.
+  String _kind = 'expense';
+
+  void _openMonth(int year, int month) {
+    ref.read(focusedMonthProvider.notifier).state = DateTime(year, month);
+    ref.read(homeTabIndexProvider.notifier).state = 0; // jump to Calendar
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final focused = ref.watch(focusedMonthProvider);
     final repo = ref.watch(homeTotalsRepoProvider);
     final txnRepo = ref.watch(transactionRepoProvider);
+    final db = ref.watch(appDatabaseProvider);
     final categoriesAsync = ref.watch(allCategoriesProvider);
-    final now = DateTime.now();
+    final year = focused.year;
 
     return StreamBuilder<List<MonthSummary>>(
-      stream: repo.watchMonthlySummaries(focused.year),
+      stream: repo.watchMonthlySummaries(year),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
         final months = snapshot.data!;
 
         final yearIncome = months.fold(0.0, (a, b) => a + b.income);
         final yearExpense = months.fold(0.0, (a, b) => a + b.expense);
+        final monthsWithSpend = months.where((m) => m.expense > 0).length;
+        final avgSpend = monthsWithSpend == 0 ? 0.0 : yearExpense / monthsWithSpend;
         final busiest = months.isEmpty ? null : months.reduce((a, b) => a.expense >= b.expense ? a : b);
 
-        // "This month" is always the real current month — kept pinned to
-        // the top regardless of which year the list below is browsing.
-        final otherMonths = months.reversed.where((m) => !(m.year == now.year && m.month == now.month)).toList();
+        // The "current" month is always pinned on top. For any other year
+        // the latest month (December) takes that place.
+        final now = DateTime.now();
+        final isCurrentYear = year == now.year;
+        final featuredMonth = isCurrentYear ? now.month : 12;
+        final featured = months[featuredMonth - 1];
+        final earlier = months.where((m) => m.month < featuredMonth).toList().reversed.toList();
 
-        return ListView(
-          padding: const EdgeInsets.only(bottom: 90),
-          children: [
-            // ---- 1. This month, always on top ----
-            _CurrentMonthHero(),
+        return StreamBuilder<List<PeopleEntry>>(
+          stream: db.watchPeopleEntriesByEntryDate(DateTime(year, 1, 1), DateTime(year, 12, 31, 23, 59, 59)),
+          builder: (context, peopleSnap) {
+            final people = peopleSnap.data ?? const <PeopleEntry>[];
+            int settleLeft(int month) => people.where((p) => !p.settled && p.entryDate.month == month).length;
 
-            // ---- 2. Month by month (rest of the focused year) ----
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('${focused.year}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                  Text(
-                    'In $kCurrencySymbol${compactAmount(yearIncome)}  ·  Out $kCurrencySymbol${compactAmount(yearExpense)}',
-                    style: const TextStyle(fontSize: 11.5, color: Colors.grey),
+            return ListView(
+              padding: const EdgeInsets.only(bottom: 96),
+              children: [
+                // ---- 1. Featured month ----
+                _featuredCard(
+                  featured: featured,
+                  isCurrent: isCurrentYear,
+                  settleLeft: settleLeft(featured.month),
+                  categoriesAsync: categoriesAsync,
+                  txnRepo: txnRepo,
+                ),
+
+                // ---- 2. Earlier months ----
+                if (earlier.isNotEmpty) SectionTitle('Earlier in $year'),
+                ...earlier.map((m) => _monthRow(m, settleLeft(m.month))),
+
+                // ---- 3. Year at a glance ----
+                SectionTitle('$year at a glance'),
+                AppCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _headerStat('Income', yearIncome, AppColors.incomeGreen),
+                      _headerStat('Expenses', yearExpense, AppColors.expense),
+                      _headerStat('Net', yearIncome - yearExpense, yearIncome - yearExpense >= 0 ? AppColors.incomeGreen : AppColors.expense),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: AppColors.surface.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Column(
-                children: [
-                  for (final m in otherMonths) ...[
-                    _MonthRow(summary: m, onTap: () => ref.read(focusedMonthProvider.notifier).state = DateTime(m.year, m.month)),
-                    if (m != otherMonths.last) const Divider(height: 1, indent: 16, endIndent: 16),
-                  ],
-                  if (otherMonths.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(18),
-                      child: Text('No other months yet', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                ),
+                TwoUp(
+                  left: _InsightTile(
+                    label: 'Avg / active month',
+                    value: fmtMoney(avgSpend),
+                    icon: Icons.trending_flat,
+                  ),
+                  right: _InsightTile(
+                    label: 'Highest month',
+                    value: busiest == null || busiest.expense == 0
+                        ? '—'
+                        : '${DateFormat.MMM().format(DateTime(busiest.year, busiest.month))} · ${fmtMoney(busiest.expense)}',
+                    icon: Icons.arrow_upward,
+                  ),
+                ),
+
+                // ---- 4. Charts ----
+                ChartCard(
+                  title: 'Income vs Expense',
+                  subtitle: 'Each month of $year',
+                  height: 180,
+                  child: IncomeExpenseBarChart(months: months),
+                ),
+                ChartCard(
+                  title: 'Cumulative through the year',
+                  subtitle: 'How spending and income build up',
+                  height: 170,
+                  child: CumulativeLineChart(months: months),
+                ),
+                categoriesAsync.when(
+                  data: (categories) => StreamBuilder<List<Transaction>>(
+                    stream: txnRepo.watchHomeTransactionsBetween(
+                      DateTime(year, 1, 1),
+                      DateTime(year, 12, 31, 23, 59, 59),
                     ),
-                ],
-              ),
-            ),
-
-            if (busiest != null && busiest.expense > 0)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                child: _InsightTile(
-                  label: 'Biggest month of ${focused.year}',
-                  value: '${DateFormat.MMMM().format(DateTime(busiest.year, busiest.month))} · $kCurrencySymbol${compactAmount(busiest.expense)}',
-                  icon: Icons.arrow_upward,
+                    builder: (context, rowsSnap) {
+                      if (!rowsSnap.hasData) {
+                        return const ChartCard(title: 'Where it went', height: 170, child: Center(child: CircularProgressIndicator()));
+                      }
+                      final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: 'expense');
+                      return ChartCard(
+                        title: 'Where it went',
+                        subtitle: 'Expenses by category, $year',
+                        height: 170,
+                        child: CompactCategoryDonut(slices: slices),
+                      );
+                    },
+                  ),
+                  loading: () => const SizedBox.shrink(),
+                  error: (e, _) => const SizedBox.shrink(),
                 ),
-              ),
-
-            // ---- 3. Charts ----
-            ChartCard(
-              title: 'Income vs Expense',
-              subtitle: 'Each month of ${focused.year}',
-              height: 180,
-              child: IncomeExpenseBarChart(months: months),
-            ),
-            ChartCard(
-              title: 'Cumulative through the year',
-              subtitle: 'How spending and income build up',
-              height: 170,
-              child: CumulativeLineChart(months: months),
-            ),
-            categoriesAsync.when(
-              data: (categories) => StreamBuilder<List<Transaction>>(
-                stream: txnRepo.watchHomeTransactionsBetween(
-                  DateTime(focused.year, 1, 1),
-                  DateTime(focused.year, 12, 31, 23, 59, 59),
-                ),
-                builder: (context, rowsSnap) {
-                  if (!rowsSnap.hasData) {
-                    return const ChartCard(title: 'Where it went', height: 170, child: Center(child: CircularProgressIndicator()));
-                  }
-                  final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: 'expense');
-                  return ChartCard(
-                    title: 'Where it went',
-                    subtitle: 'Expenses by category, ${focused.year}',
-                    height: 170,
-                    child: CompactCategoryDonut(slices: slices),
-                  );
-                },
-              ),
-              loading: () => const SizedBox.shrink(),
-              error: (e, _) => const SizedBox.shrink(),
-            ),
-          ],
+              ],
+            );
+          },
         );
       },
     );
   }
-}
 
-/// Pinned "this month" spotlight card: an Income/Expense toggle plus its
-/// own category breakdown, so the person sees where they stand right now
-/// before ever scrolling.
-class _CurrentMonthHero extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final now = DateTime.now();
-    final kind = ref.watch(_heroKindProvider);
-    final isIncome = kind == 'income';
-    final totalsRepo = ref.watch(homeTotalsRepoProvider);
-    final txnRepo = ref.watch(transactionRepoProvider);
-    final categoriesAsync = ref.watch(allCategoriesProvider);
+  // -------------------------------------------------------------------------
+  // Featured (current) month
+  // -------------------------------------------------------------------------
+  Widget _featuredCard({
+    required MonthSummary featured,
+    required bool isCurrent,
+    required int settleLeft,
+    required AsyncValue<List<Category>> categoriesAsync,
+    required TransactionRepository txnRepo,
+  }) {
+    final date = DateTime(featured.year, featured.month);
+    final start = DateTime(featured.year, featured.month, 1);
+    final end = DateTime(featured.year, featured.month + 1, 1).subtract(const Duration(milliseconds: 1));
+    final isIncome = _kind == 'income';
+    final net = featured.total;
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.6),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.accent.withOpacity(0.25)),
-      ),
+    return AppCard(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+      padding: const EdgeInsets.all(14),
+      borderColor: AppColors.accent.withOpacity(0.4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(DateFormat.MMMM().format(now), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
-              SegmentedButton<String>(
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                segments: const [
-                  ButtonSegment(value: 'income', icon: Icon(Icons.arrow_downward, size: 14), label: Text('Income')),
-                  ButtonSegment(value: 'expense', icon: Icon(Icons.arrow_upward, size: 14), label: Text('Expense')),
-                ],
-                selected: {kind},
-                onSelectionChanged: (s) => ref.read(_heroKindProvider.notifier).state = s.first,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(DateFormat.MMMM().format(date), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                        const SizedBox(width: 8),
+                        if (isCurrent) const MiniTag('THIS MONTH', color: AppColors.accent),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text('${featured.year}', style: const TextStyle(fontSize: 11.5, color: Colors.grey)),
+                  ],
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => _openMonth(featured.year, featured.month),
+                icon: const Text('Open'),
+                label: const Icon(Icons.chevron_right, size: 18),
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
               ),
             ],
           ),
-          const SizedBox(height: 4),
-          const Text('By category', style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+          const SizedBox(height: 10),
+
+          // Income / Expense cards double as the donut's toggle.
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: StatCard(
+                    label: 'Income',
+                    value: fmtMoney(featured.income),
+                    color: AppColors.incomeGreen,
+                    icon: Icons.arrow_downward_rounded,
+                    selected: isIncome,
+                    onTap: () => setState(() => _kind = 'income'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: StatCard(
+                    label: 'Expense',
+                    value: fmtMoney(featured.expense),
+                    color: AppColors.expense,
+                    icon: Icons.arrow_upward_rounded,
+                    selected: !isIncome,
+                    onTap: () => setState(() => _kind = 'expense'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              const Text('Net savings', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              const Spacer(),
+              Text(
+                fmtMoney(net),
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: net >= 0 ? AppColors.incomeGreen : AppColors.expense),
+              ),
+            ],
+          ),
+          if (settleLeft > 0) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(Icons.people_alt_outlined, size: 13, color: AppColors.borrowedLent),
+                const SizedBox(width: 5),
+                Text(
+                  '$settleLeft people transaction${settleLeft == 1 ? '' : 's'} left to settle',
+                  style: const TextStyle(fontSize: 11.5, color: AppColors.borrowedLent),
+                ),
+              ],
+            ),
+          ],
+          const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Divider(height: 1)),
+          Text(
+            'By category · ${isIncome ? 'Income' : 'Expense'}',
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 10),
           SizedBox(
             height: 150,
-            child: StreamBuilder<List<Transaction>>(
-              stream: txnRepo.watchHomeTransactionsBetween(DateTime(now.year, now.month, 1), DateTime(now.year, now.month + 1, 1).subtract(const Duration(milliseconds: 1))),
-              builder: (context, snap) {
-                if (!snap.hasData) return const Center(child: CircularProgressIndicator(strokeWidth: 2));
-                return categoriesAsync.when(
-                  data: (categories) {
-                    final slices = txnRepo.categoryBreakdown(snap.data!, categories, kind: kind);
-                    return CompactCategoryDonut(slices: slices);
-                  },
-                  loading: () => const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                  error: (e, _) => Text('$e'),
-                );
-              },
+            child: categoriesAsync.when(
+              data: (categories) => StreamBuilder<List<Transaction>>(
+                stream: txnRepo.watchHomeTransactionsBetween(start, end),
+                builder: (context, rowsSnap) {
+                  if (!rowsSnap.hasData) return const Center(child: CircularProgressIndicator());
+                  final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: _kind);
+                  return CompactCategoryDonut(slices: slices);
+                },
+              ),
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('$e')),
             ),
-          ),
-          const SizedBox(height: 8),
-          StreamBuilder(
-            stream: totalsRepo.watchTotalsForMonth(now.year, now.month),
-            builder: (context, snap) {
-              final t = snap.data;
-              final value = t == null ? 0.0 : (isIncome ? t.income : t.expense);
-              return Align(
-                alignment: Alignment.centerRight,
-                child: Text(
-                  'Total $kCurrencySymbol${value.toStringAsFixed(0)}',
-                  style: TextStyle(color: isIncome ? AppColors.incomeGreen : AppColors.expense, fontWeight: FontWeight.bold, fontSize: 13),
-                ),
-              );
-            },
           ),
         ],
       ),
     );
   }
-}
 
-class _MonthRow extends StatelessWidget {
-  final MonthSummary summary;
-  final VoidCallback onTap;
-  const _MonthRow({required this.summary, required this.onTap});
+  // -------------------------------------------------------------------------
+  // One earlier month
+  // -------------------------------------------------------------------------
+  Widget _monthRow(MonthSummary m, int settleLeft) {
+    final name = DateFormat.MMMM().format(DateTime(m.year, m.month));
+    final isEmpty = m.income == 0 && m.expense == 0 && settleLeft == 0;
 
-  @override
-  Widget build(BuildContext context) {
-    final monthName = DateFormat.MMMM().format(DateTime(summary.year, summary.month));
-    final isEmpty = summary.income == 0 && summary.expense == 0;
+    String subtitle;
+    Color subtitleColor = Colors.grey;
+    if (settleLeft > 0) {
+      subtitle = '$settleLeft people transaction${settleLeft == 1 ? '' : 's'} left to settle';
+      subtitleColor = AppColors.borrowedLent;
+    } else if (isEmpty) {
+      subtitle = 'No activity';
+    } else {
+      subtitle = 'Net ${fmtMoney(m.total)}';
+    }
+
     return Opacity(
-      opacity: isEmpty ? 0.45 : 1,
-      child: ListTile(
-        dense: true,
-        title: Text(monthName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-        subtitle: Text(
-          'In $kCurrencySymbol${summary.income.toStringAsFixed(0)}  ·  Out $kCurrencySymbol${summary.expense.toStringAsFixed(0)}',
-          style: const TextStyle(fontSize: 11),
+      opacity: isEmpty ? 0.5 : 1,
+      child: AppCard(
+        margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        onTap: () => _openMonth(m.year, m.month),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                  const SizedBox(height: 3),
+                  Text(subtitle, style: TextStyle(fontSize: 11, color: subtitleColor)),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text('+${fmtMoney(m.income)}', style: const TextStyle(color: AppColors.incomeGreen, fontWeight: FontWeight.w700, fontSize: 13)),
+                const SizedBox(height: 2),
+                Text('-${fmtMoney(m.expense)}', style: const TextStyle(color: AppColors.expense, fontWeight: FontWeight.w700, fontSize: 13)),
+              ],
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right, size: 18, color: Colors.white24),
+          ],
         ),
-        trailing: Text(
-          '${summary.total >= 0 ? '+' : '-'}$kCurrencySymbol${summary.total.abs().toStringAsFixed(0)}',
-          style: TextStyle(color: summary.total >= 0 ? AppColors.incomeGreen : AppColors.expense, fontWeight: FontWeight.bold),
-        ),
-        onTap: onTap,
       ),
     );
   }
+
+  Widget _headerStat(String label, double value, Color color) => Column(
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+          const SizedBox(height: 3),
+          Text(fmtMoney(value), style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 16)),
+        ],
+      );
 }
 
 class _InsightTile extends StatelessWidget {
@@ -247,13 +356,9 @@ class _InsightTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white10),
-      ),
+    return AppCard(
+      margin: EdgeInsets.zero,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       child: Row(
         children: [
           Icon(icon, size: 16, color: Colors.grey),

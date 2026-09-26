@@ -5,12 +5,17 @@ import '../../core/constants.dart';
 import '../../providers/app_providers.dart';
 import '../../models/models.dart';
 import '../../data/local/app_database.dart';
+import '../../widgets/add_transaction_modal.dart';
 import '../../widgets/stat_charts.dart';
+import '../../widgets/ui_kit.dart';
 
 /// A DEDICATED ledger for entries ticked "Mark as yearly expense" in the
 /// add-entry modal (shoes, clothes, courses, insurance...). Regular
 /// day-to-day transactions never appear here — those live in the
 /// Calendar / Monthly / Total tabs.
+///
+/// Layout: Biggest month + Total cards → month list → chart → categories
+/// donut → individual entries.
 class YearlyTab extends ConsumerWidget {
   const YearlyTab({super.key});
 
@@ -30,212 +35,204 @@ class YearlyTab extends ConsumerWidget {
         final yearTotal = months.fold(0.0, (a, b) => a + b.expense);
         final activeMonths = months.where((m) => m.expense > 0).length;
         final biggest = months.isEmpty ? null : months.reduce((a, b) => a.expense >= b.expense ? a : b);
+        final hasData = yearTotal > 0;
+
+        // Months that actually have yearly spend, biggest first.
+        final ranked = months.where((m) => m.expense > 0).toList()..sort((a, b) => b.expense.compareTo(a.expense));
+        final maxMonth = ranked.isEmpty ? 1.0 : ranked.first.expense;
 
         return ListView(
-          padding: const EdgeInsets.only(bottom: 90),
+          padding: const EdgeInsets.only(bottom: 96),
           children: [
-            // ---- Summary ----
-            Container(
-              margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.expense.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppColors.expense.withOpacity(0.3)),
+            // ---- Summary cards ----
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+              child: TwoUp(
+                left: StatCard(
+                  label: 'Biggest month',
+                  value: hasData && biggest != null
+                      ? '${DateFormat.MMM().format(DateTime(biggest.year, biggest.month))} · ${fmtMoney(biggest.expense)}'
+                      : '—',
+                  color: AppColors.accent,
+                  icon: Icons.local_fire_department_outlined,
+                  subtitle: hasData ? 'Highest yearly spend' : 'Nothing yet',
+                ),
+                right: StatCard(
+                  label: 'Total expense',
+                  value: fmtMoney(yearTotal),
+                  color: AppColors.expense,
+                  icon: Icons.event_repeat_outlined,
+                  subtitle: hasData
+                      ? 'Avg ${fmtMoney(yearTotal / activeMonths)} · $activeMonths month${activeMonths == 1 ? '' : 's'}'
+                      : 'Yearly-marked spend',
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      const Text('Yearly-marked spend', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      Text(
-                        '$kCurrencySymbol${yearTotal.toStringAsFixed(0)}',
-                        style: const TextStyle(color: AppColors.expense, fontWeight: FontWeight.bold, fontSize: 22),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    activeMonths == 0
-                        ? 'Nothing marked as a yearly expense in $year yet.'
-                        : 'Across $activeMonths month${activeMonths == 1 ? '' : 's'} of $year. '
-                            'These are kept out of your monthly totals on purpose.',
-                    style: const TextStyle(fontSize: 11, color: Colors.grey, height: 1.4),
-                  ),
-                ],
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(18, 2, 18, 0),
+              child: Text(
+                'These are kept out of your monthly totals on purpose.',
+                style: TextStyle(fontSize: 11, color: Colors.grey),
               ),
             ),
 
-            if (biggest != null && biggest.expense > 0)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
-                child: Row(
+            if (!hasData)
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: EmptyState(
+                  icon: Icons.event_repeat_outlined,
+                  message: 'Tick "Mark as yearly expense" when adding a transaction\nand it will show up here.',
+                ),
+              )
+            else ...[
+              // ---- Month list ----
+              const SectionTitle('By month'),
+              AppCard(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Column(
                   children: [
-                    Expanded(
-                      child: _MiniStat(
-                        label: 'Biggest month',
-                        value: '${DateFormat.MMM().format(DateTime(biggest.year, biggest.month))} · $kCurrencySymbol${compactAmount(biggest.expense)}',
+                    for (final m in ranked)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 44,
+                              child: Text(
+                                DateFormat.MMM().format(DateTime(m.year, m.month)),
+                                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
+                              ),
+                            ),
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: LinearProgressIndicator(
+                                  value: (m.expense / maxMonth).clamp(0.0, 1.0),
+                                  minHeight: 7,
+                                  backgroundColor: Colors.white10,
+                                  valueColor: const AlwaysStoppedAnimation(AppColors.expense),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            SizedBox(
+                              width: 78,
+                              child: Text(
+                                fmtMoney(m.expense),
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.expense),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _MiniStat(
-                        label: 'Total Expense',
-                        value: '$kCurrencySymbol${compactAmount(yearTotal)}',
-                      ),
-                    ),
                   ],
                 ),
               ),
 
-            // ---- Month-by-month rows (only months with yearly-marked spend) ----
-            if (activeMonths > 0) ...[
-              Container(
-                margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                decoration: BoxDecoration(
-                  color: AppColors.surface.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: Builder(builder: (context) {
-                  final activeMonths = months.where((m) => m.expense > 0).toList().reversed.toList();
-                  return Column(
-                    children: [
-                      for (int i = 0; i < activeMonths.length; i++) ...[
-                        ListTile(
-                          dense: true,
-                          title: Text(DateFormat.MMMM().format(DateTime(activeMonths[i].year, activeMonths[i].month)), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                          trailing: Text(
-                            '$kCurrencySymbol${activeMonths[i].expense.toStringAsFixed(0)}',
-                            style: const TextStyle(color: AppColors.expense, fontWeight: FontWeight.bold),
-                          ),
-                          onTap: () => ref.read(focusedMonthProvider.notifier).state = DateTime(activeMonths[i].year, activeMonths[i].month),
-                        ),
-                        if (i < activeMonths.length - 1) const Divider(height: 1, indent: 16, endIndent: 16),
-                      ],
-                    ],
-                  );
-                }),
+              // ---- Charts ----
+              ChartCard(
+                title: 'Yearly expenses by month',
+                subtitle: 'When the big one-off spends landed',
+                height: 175,
+                child: SingleSeriesBarChart(months: months, color: AppColors.expense),
               ),
-            ],
-
-            // ---- Charts ----
-            ChartCard(
-              title: 'Yearly expenses by month',
-              subtitle: 'When the big one-off spends landed',
-              height: 175,
-              child: SingleSeriesBarChart(months: months, color: AppColors.expense),
-            ),
-            categoriesAsync.when(
-              data: (categories) => StreamBuilder<List<Transaction>>(
-                stream: txnRepo.watchYearlyMarkedBetween(DateTime(year, 1, 1), DateTime(year, 12, 31, 23, 59, 59)),
-                builder: (context, rowsSnap) {
-                  if (!rowsSnap.hasData) {
-                    return const ChartCard(title: 'By category', height: 170, child: Center(child: CircularProgressIndicator()));
-                  }
-                  final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: 'expense');
-                  return ChartCard(
-                    title: 'By categories',
-                    subtitle: 'Yearly-marked spend, $year',
-                    height: 170,
-                    child: CompactCategoryDonut(slices: slices),
-                  );
-                },
-              ),
-              loading: () => const SizedBox.shrink(),
-              error: (e, _) => const SizedBox.shrink(),
-            ),
-
-            // ---- Individual entries ----
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Text('Entries', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-            ),
-            const Divider(height: 1),
-            categoriesAsync.when(
-              data: (categories) {
-                final catsById = {for (final c in categories) c.id: c};
-                return StreamBuilder<List<Transaction>>(
+              categoriesAsync.when(
+                data: (categories) => StreamBuilder<List<Transaction>>(
                   stream: txnRepo.watchYearlyMarkedBetween(DateTime(year, 1, 1), DateTime(year, 12, 31, 23, 59, 59)),
                   builder: (context, rowsSnap) {
-                    final rows = (rowsSnap.data ?? [])..sort((a, b) => b.txnDate.compareTo(a.txnDate));
-                    if (rows.isEmpty) {
-                      return const Padding(
-                        padding: EdgeInsets.all(28),
-                        child: Center(
-                          child: Text(
-                            'Tick "Mark as yearly expense" when adding a transaction\nand it will show up here.',
-                            style: TextStyle(color: Colors.grey, fontSize: 12),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      );
+                    if (!rowsSnap.hasData) {
+                      return const ChartCard(title: 'By categories', height: 170, child: Center(child: CircularProgressIndicator()));
                     }
-                    return Column(
-                      children: rows.map((t) {
-                        final cat = t.categoryId == null ? null : catsById[t.categoryId];
-                        return ListTile(
-                          dense: true,
-                          leading: CircleAvatar(
-                            radius: 16,
-                            backgroundColor: AppColors.expense.withOpacity(0.12),
-                            child: Text(cat?.icon ?? '📁', style: const TextStyle(fontSize: 15)),
-                          ),
-                          title: Text(
-                            t.remark.isEmpty ? (cat?.name ?? 'Yearly expense') : t.remark,
-                            style: const TextStyle(fontSize: 14),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            '${DateFormat('d MMM yyyy').format(t.txnDate)}${cat == null ? '' : ' · ${cat.name}'}',
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                          trailing: Text(
-                            '$kCurrencySymbol${t.amount.toStringAsFixed(0)}',
-                            style: const TextStyle(color: AppColors.expense, fontWeight: FontWeight.bold),
-                          ),
-                        );
-                      }).toList(),
+                    final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: 'expense');
+                    return ChartCard(
+                      title: 'By categories',
+                      subtitle: 'Yearly-marked spend, $year',
+                      height: 170,
+                      child: CompactCategoryDonut(slices: slices),
                     );
                   },
-                );
-              },
-              loading: () => const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())),
-              error: (e, _) => Padding(padding: const EdgeInsets.all(16), child: Text('$e')),
-            ),
+                ),
+                loading: () => const SizedBox.shrink(),
+                error: (e, _) => const SizedBox.shrink(),
+              ),
+
+              // ---- Individual entries ----
+              const SectionTitle('Entries'),
+              categoriesAsync.when(
+                data: (categories) {
+                  final catsById = {for (final c in categories) c.id: c};
+                  return StreamBuilder<List<Transaction>>(
+                    stream: txnRepo.watchYearlyMarkedBetween(DateTime(year, 1, 1), DateTime(year, 12, 31, 23, 59, 59)),
+                    builder: (context, rowsSnap) {
+                      final rows = List<Transaction>.from(rowsSnap.data ?? const <Transaction>[])
+                        ..sort((a, b) => b.txnDate.compareTo(a.txnDate));
+                      if (rows.isEmpty) return const SizedBox.shrink();
+                      return AppCard(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Column(
+                          children: [
+                            for (int i = 0; i < rows.length; i++) ...[
+                              if (i > 0) const Divider(height: 1, indent: 66, endIndent: 14),
+                              _entryRow(context, ref, rows[i], rows[i].categoryId == null ? null : catsById[rows[i].categoryId]),
+                            ],
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+                loading: () => const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())),
+                error: (e, _) => Padding(padding: const EdgeInsets.all(16), child: Text('$e')),
+              ),
+            ],
           ],
         );
       },
     );
   }
-}
 
-class _MiniStat extends StatelessWidget {
-  final String label;
-  final String value;
-  const _MiniStat({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-          const SizedBox(height: 3),
-          Text(value, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-        ],
+  Widget _entryRow(BuildContext context, WidgetRef ref, Transaction t, Category? cat) {
+    final hasRemark = t.remark.trim().isNotEmpty;
+    return InkWell(
+      onTap: () => showEditTransactionModal(context, ref, t),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: AppColors.expense.withOpacity(0.13), borderRadius: BorderRadius.circular(11)),
+              child: Text(cat?.icon ?? '📁', style: const TextStyle(fontSize: 19)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    hasRemark ? t.remark.trim() : (cat?.name ?? 'Yearly expense'),
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${DateFormat('d MMM yyyy').format(t.txnDate)}${cat == null ? '' : ' · ${cat.name}'}',
+                    style: const TextStyle(fontSize: 11.5, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              fmtMoney(t.amount, decimals: t.amount % 1 != 0),
+              style: const TextStyle(color: AppColors.expense, fontWeight: FontWeight.w800, fontSize: 14),
+            ),
+          ],
+        ),
       ),
     );
   }

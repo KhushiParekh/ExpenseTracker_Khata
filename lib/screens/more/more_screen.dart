@@ -192,7 +192,7 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                 const SizedBox(height: 16),
 
                 // ---- Recurring transactions ----
-                _RecurringCard(),
+                const _RecurringCard(),
                 const SizedBox(height: 16),
 
                 // ---- Danger zone ----
