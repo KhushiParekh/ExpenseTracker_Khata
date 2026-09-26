@@ -69,6 +69,7 @@ class PeopleEntries extends Table {
   TextColumn get type => text()(); // borrowed / lent
   TextColumn get personName => text().withDefault(const Constant(''))();
   TextColumn get accountId => text().nullable()();
+  TextColumn get categoryId => text().nullable()(); // NEW
   RealColumn get amount => real()();
   TextColumn get remark => text().withDefault(const Constant(''))();
   DateTimeColumn get entryDate => dateTime()();
@@ -98,19 +99,20 @@ class Budgets extends Table {
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 @override
-int get schemaVersion => 3; // was 2
+int get schemaVersion => 4; // was 3
 
 @override
 MigrationStrategy get migration => MigrationStrategy(
       onCreate: (m) => m.createAll(),
       onUpgrade: (m, from, to) async {
-        // v1 -> v2: recurringGroupId
         if (from < 2) {
           await m.addColumn(transactions, transactions.recurringGroupId);
         }
-        // v2 -> v3: recurringFrequency (added later, needs its own bump)
         if (from < 3) {
           await m.addColumn(transactions, transactions.recurringFrequency);
+        }
+        if (from < 4) {
+          await m.addColumn(peopleEntries, peopleEntries.categoryId); // NEW
         }
       },
     );

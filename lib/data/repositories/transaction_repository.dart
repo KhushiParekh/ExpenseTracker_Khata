@@ -256,6 +256,58 @@ class TransactionRepository {
       return map;
     });
   }
+  
+  /// Same as [categoryBreakdown], but also folds in People (borrowed/lent)
+/// entries using the same signed-delta rules as the expense totals:
+///  - `peopleByEntryDate`: ALL entries (settled or not) whose entryDate
+///    falls in the queried range — from `watchPeopleEntriesByEntryDate`.
+///    Only `lent` entries contribute here (they count as expense from
+///    creation).
+///  - `peopleSettledInRange`: entries whose settledAt falls in the
+///    queried range — from `watchSettledPeopleEntriesBySettleDate`.
+///    Borrowed adds, lent subtracts (reversing its creation-month effect).
+/// Entries with no categoryId are ignored (nothing to attribute).
+List<CategorySlice> categoryBreakdownWithPeople(
+  List<Transaction> transactions,
+  List<PeopleEntry> peopleByEntryDate,
+  List<PeopleEntry> peopleSettledInRange,
+  List<Category> categories, {
+  required String kind, // 'expense' or 'income'
+}) {
+  final byCategory = <String, double>{};
+
+  for (final r in transactions.where((r) => r.type == kind)) {
+    final key = r.categoryId ?? 'uncategorized';
+    byCategory[key] = (byCategory[key] ?? 0) + r.amount;
+  }
+
+  if (kind == 'expense') {
+    for (final p in peopleByEntryDate.where((p) => p.type == 'lent' && p.categoryId != null)) {
+      final key = p.categoryId!;
+      byCategory[key] = (byCategory[key] ?? 0) + p.amount;
+    }
+    for (final p in peopleSettledInRange.where((p) => p.categoryId != null)) {
+      final key = p.categoryId!;
+      final delta = p.type == 'borrowed' ? p.amount : -p.amount;
+      byCategory[key] = (byCategory[key] ?? 0) + delta;
+    }
+  }
+
+  // A pie/donut can't show a negative slice — if a settlement reversal
+  // pushes a category to zero or below for the period, it just drops out.
+  final positive = Map.fromEntries(byCategory.entries.where((e) => e.value > 0));
+  final total = positive.values.fold(0.0, (a, b) => a + b);
+  final slices = positive.entries.map((e) {
+    final cat = categories.where((c) => c.id == e.key).toList();
+    final name = cat.isNotEmpty ? cat.first.name : 'Uncategorized';
+    final icon = cat.isNotEmpty ? cat.first.icon : '❓';
+    final slice = CategorySlice(categoryId: e.key, name: name, icon: icon, amount: e.value);
+    slice.percent = total == 0 ? 0 : (e.value / total) * 100;
+    return slice;
+  }).toList()
+    ..sort((a, b) => b.amount.compareTo(a.amount));
+  return slices;
+}
 }
 
 

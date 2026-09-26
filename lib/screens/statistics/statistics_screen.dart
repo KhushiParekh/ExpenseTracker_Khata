@@ -57,20 +57,20 @@ class StatisticsScreen extends ConsumerWidget {
 
   /// Sums [rows] into one bucket per day (weekly / monthly) or per month
   /// (annually). Shared by the trend chart and the Biggest / Lowest card.
-  List<double> _buckets(List<Transaction> rows, DateTime start, DateTime end, StatsRange range) {
+  List<double> _buckets(List<MapEntry<DateTime, double>> events, DateTime start, DateTime end, StatsRange range) {
     if (range == StatsRange.annually) {
       final byMonth = List<double>.filled(12, 0);
-      for (final r in rows) {
-        byMonth[r.txnDate.month - 1] += r.amount;
+      for (final e in events) {
+        byMonth[e.key.month - 1] += e.value;
       }
       return byMonth;
     }
     final dayCount = end.difference(start).inDays + 1;
     final byDay = List<double>.filled(dayCount, 0);
     final s = DateTime(start.year, start.month, start.day);
-    for (final r in rows) {
-      final idx = DateTime(r.txnDate.year, r.txnDate.month, r.txnDate.day).difference(s).inDays;
-      if (idx >= 0 && idx < dayCount) byDay[idx] += r.amount;
+    for (final e in events) {
+      final idx = DateTime(e.key.year, e.key.month, e.key.day).difference(s).inDays;
+      if (idx >= 0 && idx < dayCount) byDay[idx] += e.value;
     }
     return byDay;
   }
@@ -184,12 +184,36 @@ class StatisticsScreen extends ConsumerWidget {
               builder: (context, snap) {
                 if (!snap.hasData) return const Center(child: CircularProgressIndicator());
                 final rows = snap.data!;
+
+                final db = ref.watch(appDatabaseProvider);
+                return StreamBuilder<List<PeopleEntry>>(
+                  stream: db.watchPeopleEntriesByEntryDate(start, end),
+                  builder: (context, peopleSnap) {
+                    final people = peopleSnap.data ?? const <PeopleEntry>[];
+                    return StreamBuilder<List<PeopleEntry>>(
+                      stream: db.watchSettledPeopleEntriesBySettleDate(start, end),
+                      builder: (context, settledSnap) {
+                        final peopleSettled = settledSnap.data ?? const <PeopleEntry>[];
+
                 final matching = rows.where((r) => r.type == kind).toList();
-                final total = matching.fold(0.0, (a, b) => a + b.amount);
+
+                // Combine into (date, signed amount) events. People only
+                // ever affects 'expense', never 'income'.
+                final events = <MapEntry<DateTime, double>>[
+                  for (final r in matching) MapEntry(r.txnDate, r.amount),
+                  if (kind == 'expense') ...[
+                    for (final p in people.where((p) => p.type == 'lent'))
+                      MapEntry(p.entryDate, p.amount),
+                    for (final p in peopleSettled)
+                      MapEntry(p.settledAt!, p.type == 'borrowed' ? p.amount : -p.amount),
+                  ],
+                ];
+
+                final total = events.fold(0.0, (a, b) => a + b.value);
                 final yearlyPortion = matching.where((r) => r.isYearly).fold(0.0, (a, b) => a + b.amount);
 
                 // Biggest / lowest bucket (day or month) that has any activity.
-                final buckets = _buckets(matching, start, end, range);
+                final buckets = _buckets(events, start, end, range);
                 int? bigIdx, lowIdx;
                 for (int i = 0; i < buckets.length; i++) {
                   if (buckets[i] <= 0) continue;
@@ -201,8 +225,9 @@ class StatisticsScreen extends ConsumerWidget {
 
                 return categoriesAsync.when(
                   data: (categories) {
-                    final slices = txnRepo.categoryBreakdown(rows, categories, kind: kind);
-
+                    final slices = kind == 'expense'
+                        ? txnRepo.categoryBreakdownWithPeople(rows, people, peopleSettled, categories, kind: 'expense')
+                        : txnRepo.categoryBreakdown(rows, categories, kind: 'income');
                     return ListView(
                       padding: const EdgeInsets.only(bottom: 24),
                       children: [
@@ -253,7 +278,7 @@ class StatisticsScreen extends ConsumerWidget {
                           subtitle: 'Trend across $label',
                           height: 170,
                           child: _PeriodTrendChart(
-                            rows: matching,
+                            events: events,
                             start: start,
                             end: end,
                             range: range,
@@ -281,6 +306,10 @@ class StatisticsScreen extends ConsumerWidget {
                   },
                   loading: () => const Center(child: CircularProgressIndicator()),
                   error: (e, _) => Center(child: Text('$e')),
+                );
+                      },
+                    );
+                  },
                 );
               },
             ),
@@ -390,14 +419,14 @@ class _KindTab extends StatelessWidget {
 /// Buckets the period's transactions by day (weekly/monthly view) or by
 /// month (annual view) and draws them as bars.
 class _PeriodTrendChart extends StatelessWidget {
-  final List<Transaction> rows;
+  final List<MapEntry<DateTime, double>> events;
   final DateTime start;
   final DateTime end;
   final StatsRange range;
   final Color color;
 
   const _PeriodTrendChart({
-    required this.rows,
+    required this.events,
     required this.start,
     required this.end,
     required this.range,
@@ -409,8 +438,8 @@ class _PeriodTrendChart extends StatelessWidget {
     // Reuse the month-summary bar chart for the annual view.
     if (range == StatsRange.annually) {
       final byMonth = List<double>.filled(13, 0);
-      for (final r in rows) {
-        byMonth[r.txnDate.month] += r.amount;
+      for (final e in events) {
+        byMonth[e.key.month] += e.value;
       }
       final months = [
         for (int m = 1; m <= 12; m++) MonthSummary(year: start.year, month: m, income: 0, expense: byMonth[m])
@@ -421,9 +450,9 @@ class _PeriodTrendChart extends StatelessWidget {
     // Day buckets for weekly/monthly.
     final dayCount = end.difference(start).inDays + 1;
     final byDay = List<double>.filled(dayCount, 0);
-    for (final r in rows) {
-      final idx = DateTime(r.txnDate.year, r.txnDate.month, r.txnDate.day).difference(DateTime(start.year, start.month, start.day)).inDays;
-      if (idx >= 0 && idx < dayCount) byDay[idx] += r.amount;
+    for (final e in events) {
+      final idx = DateTime(e.key.year, e.key.month, e.key.day).difference(DateTime(start.year, start.month, start.day)).inDays;
+      if (idx >= 0 && idx < dayCount) byDay[idx] += e.value;
     }
 
     final maxVal = byDay.fold<double>(0, (m, v) => v > m ? v : m);

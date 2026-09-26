@@ -21,6 +21,7 @@ class PeopleRepository {
     required DateTime date,
     String personName = '',
     String? accountId,
+    String? categoryId,
     String remark = '',
   }) async {
     await db.into(db.peopleEntries).insert(PeopleEntriesCompanion.insert(
@@ -30,6 +31,7 @@ class PeopleRepository {
           entryDate: date,
           personName: Value(personName),
           accountId: Value(accountId),
+          categoryId: Value(categoryId),
           remark: Value(remark),
           updatedAt: DateTime.now(),
           pendingSync: const Value(true),
@@ -50,6 +52,7 @@ class PeopleRepository {
     PeopleEntry existing, {
     required String type,
     required double amount,
+    String? categoryId,
     required DateTime date,
     String personName = '',
     String? accountId,
@@ -68,6 +71,7 @@ class PeopleRepository {
         amount: Value(amount),
         entryDate: Value(date),
         personName: Value(personName),
+        categoryId: Value(categoryId),
         accountId: Value(accountId),
         remark: Value(remark),
         updatedAt: Value(DateTime.now()),

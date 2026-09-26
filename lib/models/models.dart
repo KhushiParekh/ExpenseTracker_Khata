@@ -102,6 +102,7 @@ class PeopleEntryModel {
   final String type; // borrowed, lent
   final String personName;
   final String? accountId;
+  final String? categoryId;
   final double amount;
   final String remark;
   final DateTime entryDate;
@@ -117,6 +118,7 @@ class PeopleEntryModel {
     this.personName = '',
     this.accountId,
     required this.amount,
+    this.categoryId,
     this.remark = '',
     required this.entryDate,
     this.settled = false,

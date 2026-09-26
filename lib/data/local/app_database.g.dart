@@ -1533,6 +1533,12 @@ class $PeopleEntriesTable extends PeopleEntries
   late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
       'account_id', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _categoryIdMeta =
+      const VerificationMeta('categoryId');
+  @override
+  late final GeneratedColumn<String> categoryId = GeneratedColumn<String>(
+      'category_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _amountMeta = const VerificationMeta('amount');
   @override
   late final GeneratedColumn<double> amount = GeneratedColumn<double>(
@@ -1599,6 +1605,7 @@ class $PeopleEntriesTable extends PeopleEntries
         type,
         personName,
         accountId,
+        categoryId,
         amount,
         remark,
         entryDate,
@@ -1638,6 +1645,12 @@ class $PeopleEntriesTable extends PeopleEntries
     if (data.containsKey('account_id')) {
       context.handle(_accountIdMeta,
           accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta));
+    }
+    if (data.containsKey('category_id')) {
+      context.handle(
+          _categoryIdMeta,
+          categoryId.isAcceptableOrUnknown(
+              data['category_id']!, _categoryIdMeta));
     }
     if (data.containsKey('amount')) {
       context.handle(_amountMeta,
@@ -1696,6 +1709,8 @@ class $PeopleEntriesTable extends PeopleEntries
           .read(DriftSqlType.string, data['${effectivePrefix}person_name'])!,
       accountId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}account_id']),
+      categoryId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}category_id']),
       amount: attachedDatabase.typeMapping
           .read(DriftSqlType.double, data['${effectivePrefix}amount'])!,
       remark: attachedDatabase.typeMapping
@@ -1726,6 +1741,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
   final String type;
   final String personName;
   final String? accountId;
+  final String? categoryId;
   final double amount;
   final String remark;
   final DateTime entryDate;
@@ -1739,6 +1755,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
       required this.type,
       required this.personName,
       this.accountId,
+      this.categoryId,
       required this.amount,
       required this.remark,
       required this.entryDate,
@@ -1755,6 +1772,9 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
     map['person_name'] = Variable<String>(personName);
     if (!nullToAbsent || accountId != null) {
       map['account_id'] = Variable<String>(accountId);
+    }
+    if (!nullToAbsent || categoryId != null) {
+      map['category_id'] = Variable<String>(categoryId);
     }
     map['amount'] = Variable<double>(amount);
     map['remark'] = Variable<String>(remark);
@@ -1777,6 +1797,9 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
       accountId: accountId == null && nullToAbsent
           ? const Value.absent()
           : Value(accountId),
+      categoryId: categoryId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(categoryId),
       amount: Value(amount),
       remark: Value(remark),
       entryDate: Value(entryDate),
@@ -1798,6 +1821,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
       type: serializer.fromJson<String>(json['type']),
       personName: serializer.fromJson<String>(json['personName']),
       accountId: serializer.fromJson<String?>(json['accountId']),
+      categoryId: serializer.fromJson<String?>(json['categoryId']),
       amount: serializer.fromJson<double>(json['amount']),
       remark: serializer.fromJson<String>(json['remark']),
       entryDate: serializer.fromJson<DateTime>(json['entryDate']),
@@ -1816,6 +1840,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
       'type': serializer.toJson<String>(type),
       'personName': serializer.toJson<String>(personName),
       'accountId': serializer.toJson<String?>(accountId),
+      'categoryId': serializer.toJson<String?>(categoryId),
       'amount': serializer.toJson<double>(amount),
       'remark': serializer.toJson<String>(remark),
       'entryDate': serializer.toJson<DateTime>(entryDate),
@@ -1832,6 +1857,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
           String? type,
           String? personName,
           Value<String?> accountId = const Value.absent(),
+          Value<String?> categoryId = const Value.absent(),
           double? amount,
           String? remark,
           DateTime? entryDate,
@@ -1845,6 +1871,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
         type: type ?? this.type,
         personName: personName ?? this.personName,
         accountId: accountId.present ? accountId.value : this.accountId,
+        categoryId: categoryId.present ? categoryId.value : this.categoryId,
         amount: amount ?? this.amount,
         remark: remark ?? this.remark,
         entryDate: entryDate ?? this.entryDate,
@@ -1861,6 +1888,8 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
       personName:
           data.personName.present ? data.personName.value : this.personName,
       accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      categoryId:
+          data.categoryId.present ? data.categoryId.value : this.categoryId,
       amount: data.amount.present ? data.amount.value : this.amount,
       remark: data.remark.present ? data.remark.value : this.remark,
       entryDate: data.entryDate.present ? data.entryDate.value : this.entryDate,
@@ -1880,6 +1909,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
           ..write('type: $type, ')
           ..write('personName: $personName, ')
           ..write('accountId: $accountId, ')
+          ..write('categoryId: $categoryId, ')
           ..write('amount: $amount, ')
           ..write('remark: $remark, ')
           ..write('entryDate: $entryDate, ')
@@ -1893,8 +1923,20 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
   }
 
   @override
-  int get hashCode => Object.hash(id, type, personName, accountId, amount,
-      remark, entryDate, settled, settledAt, updatedAt, deleted, pendingSync);
+  int get hashCode => Object.hash(
+      id,
+      type,
+      personName,
+      accountId,
+      categoryId,
+      amount,
+      remark,
+      entryDate,
+      settled,
+      settledAt,
+      updatedAt,
+      deleted,
+      pendingSync);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1903,6 +1945,7 @@ class PeopleEntry extends DataClass implements Insertable<PeopleEntry> {
           other.type == this.type &&
           other.personName == this.personName &&
           other.accountId == this.accountId &&
+          other.categoryId == this.categoryId &&
           other.amount == this.amount &&
           other.remark == this.remark &&
           other.entryDate == this.entryDate &&
@@ -1918,6 +1961,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
   final Value<String> type;
   final Value<String> personName;
   final Value<String?> accountId;
+  final Value<String?> categoryId;
   final Value<double> amount;
   final Value<String> remark;
   final Value<DateTime> entryDate;
@@ -1932,6 +1976,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
     this.type = const Value.absent(),
     this.personName = const Value.absent(),
     this.accountId = const Value.absent(),
+    this.categoryId = const Value.absent(),
     this.amount = const Value.absent(),
     this.remark = const Value.absent(),
     this.entryDate = const Value.absent(),
@@ -1947,6 +1992,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
     required String type,
     this.personName = const Value.absent(),
     this.accountId = const Value.absent(),
+    this.categoryId = const Value.absent(),
     required double amount,
     this.remark = const Value.absent(),
     required DateTime entryDate,
@@ -1966,6 +2012,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
     Expression<String>? type,
     Expression<String>? personName,
     Expression<String>? accountId,
+    Expression<String>? categoryId,
     Expression<double>? amount,
     Expression<String>? remark,
     Expression<DateTime>? entryDate,
@@ -1981,6 +2028,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
       if (type != null) 'type': type,
       if (personName != null) 'person_name': personName,
       if (accountId != null) 'account_id': accountId,
+      if (categoryId != null) 'category_id': categoryId,
       if (amount != null) 'amount': amount,
       if (remark != null) 'remark': remark,
       if (entryDate != null) 'entry_date': entryDate,
@@ -1998,6 +2046,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
       Value<String>? type,
       Value<String>? personName,
       Value<String?>? accountId,
+      Value<String?>? categoryId,
       Value<double>? amount,
       Value<String>? remark,
       Value<DateTime>? entryDate,
@@ -2012,6 +2061,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
       type: type ?? this.type,
       personName: personName ?? this.personName,
       accountId: accountId ?? this.accountId,
+      categoryId: categoryId ?? this.categoryId,
       amount: amount ?? this.amount,
       remark: remark ?? this.remark,
       entryDate: entryDate ?? this.entryDate,
@@ -2038,6 +2088,9 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
     }
     if (accountId.present) {
       map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (categoryId.present) {
+      map['category_id'] = Variable<String>(categoryId.value);
     }
     if (amount.present) {
       map['amount'] = Variable<double>(amount.value);
@@ -2076,6 +2129,7 @@ class PeopleEntriesCompanion extends UpdateCompanion<PeopleEntry> {
           ..write('type: $type, ')
           ..write('personName: $personName, ')
           ..write('accountId: $accountId, ')
+          ..write('categoryId: $categoryId, ')
           ..write('amount: $amount, ')
           ..write('remark: $remark, ')
           ..write('entryDate: $entryDate, ')
@@ -3175,6 +3229,7 @@ typedef $$PeopleEntriesTableCreateCompanionBuilder = PeopleEntriesCompanion
   required String type,
   Value<String> personName,
   Value<String?> accountId,
+  Value<String?> categoryId,
   required double amount,
   Value<String> remark,
   required DateTime entryDate,
@@ -3191,6 +3246,7 @@ typedef $$PeopleEntriesTableUpdateCompanionBuilder = PeopleEntriesCompanion
   Value<String> type,
   Value<String> personName,
   Value<String?> accountId,
+  Value<String?> categoryId,
   Value<double> amount,
   Value<String> remark,
   Value<DateTime> entryDate,
@@ -3222,6 +3278,9 @@ class $$PeopleEntriesTableFilterComposer
 
   ColumnFilters<String> get accountId => $composableBuilder(
       column: $table.accountId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get categoryId => $composableBuilder(
+      column: $table.categoryId, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<double> get amount => $composableBuilder(
       column: $table.amount, builder: (column) => ColumnFilters(column));
@@ -3269,6 +3328,9 @@ class $$PeopleEntriesTableOrderingComposer
   ColumnOrderings<String> get accountId => $composableBuilder(
       column: $table.accountId, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get categoryId => $composableBuilder(
+      column: $table.categoryId, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<double> get amount => $composableBuilder(
       column: $table.amount, builder: (column) => ColumnOrderings(column));
 
@@ -3314,6 +3376,9 @@ class $$PeopleEntriesTableAnnotationComposer
 
   GeneratedColumn<String> get accountId =>
       $composableBuilder(column: $table.accountId, builder: (column) => column);
+
+  GeneratedColumn<String> get categoryId => $composableBuilder(
+      column: $table.categoryId, builder: (column) => column);
 
   GeneratedColumn<double> get amount =>
       $composableBuilder(column: $table.amount, builder: (column) => column);
@@ -3370,6 +3435,7 @@ class $$PeopleEntriesTableTableManager extends RootTableManager<
             Value<String> type = const Value.absent(),
             Value<String> personName = const Value.absent(),
             Value<String?> accountId = const Value.absent(),
+            Value<String?> categoryId = const Value.absent(),
             Value<double> amount = const Value.absent(),
             Value<String> remark = const Value.absent(),
             Value<DateTime> entryDate = const Value.absent(),
@@ -3385,6 +3451,7 @@ class $$PeopleEntriesTableTableManager extends RootTableManager<
             type: type,
             personName: personName,
             accountId: accountId,
+            categoryId: categoryId,
             amount: amount,
             remark: remark,
             entryDate: entryDate,
@@ -3400,6 +3467,7 @@ class $$PeopleEntriesTableTableManager extends RootTableManager<
             required String type,
             Value<String> personName = const Value.absent(),
             Value<String?> accountId = const Value.absent(),
+            Value<String?> categoryId = const Value.absent(),
             required double amount,
             Value<String> remark = const Value.absent(),
             required DateTime entryDate,
@@ -3415,6 +3483,7 @@ class $$PeopleEntriesTableTableManager extends RootTableManager<
             type: type,
             personName: personName,
             accountId: accountId,
+            categoryId: categoryId,
             amount: amount,
             remark: remark,
             entryDate: entryDate,

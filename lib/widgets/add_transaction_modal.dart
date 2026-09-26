@@ -160,6 +160,7 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
       _personCtrl.text = existingPeople.personName;
       _accountId = existingPeople.accountId;
       _accountDefaultApplied = true;
+      _categoryId = existingPeople.categoryId;
       _activeField = _ActiveField.none;
     }
   }
@@ -190,18 +191,17 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
     setState(() {
       if (k != _kind) {
         // Income and expense have separate category lists, so a category
-        // picked for one is meaningless for the other.
+        // picked for one is meaningless for the other. People shares the
+        // expense list, so switching to/from People also needs a reset.
         _categoryId = null;
       }
       _kind = k;
       if (k != EntryKind.expense) _isYearly = false;
       if (k == EntryKind.people) {
         _isRecurring = false;
-        if (_activeField == _ActiveField.category) _activeField = _ActiveField.amount;
       }
     });
   }
-
   // -------------------------------------------------------------------
   // Recurring options: frequency + how many times it repeats (the range).
   // -------------------------------------------------------------------
@@ -270,6 +270,7 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
                 date: _date,
                 personName: _personCtrl.text.trim(),
                 accountId: _accountId,
+                categoryId: _categoryId, // NEW
                 remark: _remarkCtrl.text.trim(),
               );
         } else {
@@ -279,6 +280,7 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
                 date: _date,
                 personName: _personCtrl.text.trim(),
                 accountId: _accountId,
+                categoryId: _categoryId, // NEW
                 remark: _remarkCtrl.text.trim(),
               );
         }
@@ -413,6 +415,13 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
                   ],
                 ),
                 const SizedBox(height: _gap),
+
+                // ---- Category, full width (People only) ----
+                                
+                if (_kind == EntryKind.people) ...[
+                  _categoryBox(),
+                  const SizedBox(height: _gap),
+                ],
 
                 // ---- Category + Remark, equal width and height ----
                 if (_kind != EntryKind.people) ...[

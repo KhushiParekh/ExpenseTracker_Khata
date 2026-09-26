@@ -68,94 +68,106 @@ class _MonthlyTabState extends ConsumerState<MonthlyTab> {
           stream: db.watchPeopleEntriesByEntryDate(DateTime(year, 1, 1), DateTime(year, 12, 31, 23, 59, 59)),
           builder: (context, peopleSnap) {
             final people = peopleSnap.data ?? const <PeopleEntry>[];
-            int settleLeft(int month) => people.where((p) => !p.settled && p.entryDate.month == month).length;
 
-            return ListView(
-              padding: const EdgeInsets.only(bottom: 96),
-              children: [
-                // ---- 1. Featured month ----
-                _featuredCard(
-                  featured: featured,
-                  isCurrent: isCurrentYear,
-                  settleLeft: settleLeft(featured.month),
-                  categoriesAsync: categoriesAsync,
-                  txnRepo: txnRepo,
-                ),
+            return StreamBuilder<List<PeopleEntry>>(
+              stream: db.watchSettledPeopleEntriesBySettleDate(DateTime(year, 1, 1), DateTime(year, 12, 31, 23, 59, 59)),
+              builder: (context, settledSnap) {
+                final peopleSettled = settledSnap.data ?? const <PeopleEntry>[];
+                int settleLeft(int month) => people.where((p) => !p.settled && p.entryDate.month == month).length;
 
-                // ---- 2. Earlier months ----
-                if (earlier.isNotEmpty) SectionTitle('Earlier in $year'),
-                ...earlier.map((m) => _monthRow(m, settleLeft(m.month))),
-
-                // ---- 3. Year at a glance ----
-                SectionTitle('$year at a glance'),
-                AppCard(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _headerStat('Income', yearIncome, AppColors.incomeGreen),
-                      _headerStat('Expenses', yearExpense, AppColors.expense),
-                      _headerStat('Net', yearIncome - yearExpense, yearIncome - yearExpense >= 0 ? AppColors.incomeGreen : AppColors.expense),
-                    ],
-                  ),
-                ),
-                TwoUp(
-                  left: _InsightTile(
-                    label: 'Avg / active month',
-                    value: fmtMoney(avgSpend),
-                    icon: Icons.trending_flat,
-                  ),
-                  right: _InsightTile(
-                    label: 'Highest month',
-                    value: busiest == null || busiest.expense == 0
-                        ? '—'
-                        : '${DateFormat.MMM().format(DateTime(busiest.year, busiest.month))} · ${fmtMoney(busiest.expense)}',
-                    icon: Icons.arrow_upward,
-                  ),
-                ),
-
-                // ---- 4. Charts ----
-                ChartCard(
-                  title: 'Income vs Expense',
-                  subtitle: 'Each month of $year',
-                  height: 180,
-                  child: IncomeExpenseBarChart(months: months),
-                ),
-                ChartCard(
-                  title: 'Cumulative through the year',
-                  subtitle: 'How spending and income build up',
-                  height: 170,
-                  child: CumulativeLineChart(months: months),
-                ),
-                categoriesAsync.when(
-                  data: (categories) => StreamBuilder<List<Transaction>>(
-                    stream: txnRepo.watchHomeTransactionsBetween(
-                      DateTime(year, 1, 1),
-                      DateTime(year, 12, 31, 23, 59, 59),
+                return ListView(
+                  padding: const EdgeInsets.only(bottom: 96),
+                  children: [
+                    // ---- 1. Featured month ----
+                    _featuredCard(
+                      featured: featured,
+                      isCurrent: isCurrentYear,
+                      settleLeft: settleLeft(featured.month),
+                      categoriesAsync: categoriesAsync,
+                      txnRepo: txnRepo,
+                      people: people,
+                      peopleSettled: peopleSettled,
                     ),
-                    builder: (context, rowsSnap) {
-                      if (!rowsSnap.hasData) {
-                        return const ChartCard(title: 'Where it went', height: 170, child: Center(child: CircularProgressIndicator()));
-                      }
-                      final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: 'expense');
-                      return ChartCard(
-                        title: 'Where it went',
-                        subtitle: 'Expenses by category, $year',
-                        height: 170,
-                        child: CompactCategoryDonut(slices: slices),
-                      );
-                    },
-                  ),
-                  loading: () => const SizedBox.shrink(),
-                  error: (e, _) => const SizedBox.shrink(),
-                ),
-              ],
+
+                    // ---- 2. Earlier months ----
+                    if (earlier.isNotEmpty) SectionTitle('Earlier in $year'),
+                    ...earlier.map((m) => _monthRow(m, settleLeft(m.month))),
+
+                    // ---- 3. Year at a glance ----
+                    SectionTitle('$year at a glance'),
+                    AppCard(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          _headerStat('Income', yearIncome, AppColors.incomeGreen),
+                          _headerStat('Expenses', yearExpense, AppColors.expense),
+                          _headerStat('Net', yearIncome - yearExpense, yearIncome - yearExpense >= 0 ? AppColors.incomeGreen : AppColors.expense),
+                        ],
+                      ),
+                    ),
+                    TwoUp(
+                      left: _InsightTile(
+                        label: 'Avg / active month',
+                        value: fmtMoney(avgSpend),
+                        icon: Icons.trending_flat,
+                      ),
+                      right: _InsightTile(
+                        label: 'Highest month',
+                        value: busiest == null || busiest.expense == 0
+                            ? '—'
+                            : '${DateFormat.MMM().format(DateTime(busiest.year, busiest.month))} · ${fmtMoney(busiest.expense)}',
+                        icon: Icons.arrow_upward,
+                      ),
+                    ),
+
+                    // ---- 4. Charts ----
+                    ChartCard(
+                      title: 'Income vs Expense',
+                      subtitle: 'Each month of $year',
+                      height: 180,
+                      child: IncomeExpenseBarChart(months: months),
+                    ),
+                    ChartCard(
+                      title: 'Cumulative through the year',
+                      subtitle: 'How spending and income build up',
+                      height: 170,
+                      child: CumulativeLineChart(months: months),
+                    ),
+                    categoriesAsync.when(
+                      data: (categories) => StreamBuilder<List<Transaction>>(
+                        stream: txnRepo.watchHomeTransactionsBetween(
+                          DateTime(year, 1, 1),
+                          DateTime(year, 12, 31, 23, 59, 59),
+                        ),
+                        builder: (context, rowsSnap) {
+                          if (!rowsSnap.hasData) {
+                            return const ChartCard(title: 'Where it went', height: 170, child: Center(child: CircularProgressIndicator()));
+                          }
+                          final slices = txnRepo.categoryBreakdownWithPeople(
+                            rowsSnap.data!, people, peopleSettled, categories, kind: 'expense',
+                          );
+                          return ChartCard(
+                            title: 'Where it went',
+                            subtitle: 'Expenses by category, $year',
+                            height: 170,
+                            child: CompactCategoryDonut(slices: slices),
+                          );
+                        },
+                      ),
+                      loading: () => const SizedBox.shrink(),
+                      error: (e, _) => const SizedBox.shrink(),
+                    ),
+                  ],
+                );
+              },
             );
           },
         );
       },
     );
   }
+  
 
   // -------------------------------------------------------------------------
   // Featured (current) month
@@ -166,12 +178,19 @@ class _MonthlyTabState extends ConsumerState<MonthlyTab> {
     required int settleLeft,
     required AsyncValue<List<Category>> categoriesAsync,
     required TransactionRepository txnRepo,
+    required List<PeopleEntry> people,
+    required List<PeopleEntry> peopleSettled,
   }) {
     final date = DateTime(featured.year, featured.month);
     final start = DateTime(featured.year, featured.month, 1);
     final end = DateTime(featured.year, featured.month + 1, 1).subtract(const Duration(milliseconds: 1));
     final isIncome = _kind == 'income';
     final net = featured.total;
+
+    final monthPeople = people.where((p) =>
+        !p.entryDate.isBefore(start) && !p.entryDate.isAfter(end)).toList();
+    final monthSettled = peopleSettled.where((p) =>
+        p.settledAt != null && !p.settledAt!.isBefore(start) && !p.settledAt!.isAfter(end)).toList();
 
     return AppCard(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 6),
@@ -207,8 +226,6 @@ class _MonthlyTabState extends ConsumerState<MonthlyTab> {
             ],
           ),
           const SizedBox(height: 10),
-
-          // Income / Expense cards double as the donut's toggle.
           IntrinsicHeight(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -274,7 +291,9 @@ class _MonthlyTabState extends ConsumerState<MonthlyTab> {
                 stream: txnRepo.watchHomeTransactionsBetween(start, end),
                 builder: (context, rowsSnap) {
                   if (!rowsSnap.hasData) return const Center(child: CircularProgressIndicator());
-                  final slices = txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: _kind);
+                  final slices = isIncome
+                      ? txnRepo.categoryBreakdown(rowsSnap.data!, categories, kind: 'income')
+                      : txnRepo.categoryBreakdownWithPeople(rowsSnap.data!, monthPeople, monthSettled, categories, kind: 'expense');
                   return CompactCategoryDonut(slices: slices);
                 },
               ),
