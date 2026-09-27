@@ -144,8 +144,7 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                       const SizedBox(height: 20),
                       Row(
                         children: [
-                          Expanded(child: _WideButton(label: 'Export as JSON', onPressed: _busy ? null : _exportJson)),
-                          const SizedBox(width: 12),
+                          Expanded(child: _WideButton(label: 'Backup', onPressed: _busy ? null : _exportJson)),                          const SizedBox(width: 12),
                           Expanded(child: _WideButton(label: 'Export as CSV', onPressed: _busy ? null : _exportCsv)),
                         ],
                       ),

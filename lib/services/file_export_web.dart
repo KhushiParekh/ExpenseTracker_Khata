@@ -20,3 +20,9 @@ Future<String> saveTextFile(String fileName, String contents, String mimeType) a
 
   return 'Downloads/$fileName';
 }
+// (keep existing saveTextFile as-is)
+
+/// On web the browser download itself IS the share/save action —
+/// share_plus needs raw bytes there, not a path, and the file is already
+/// in the person's Downloads, so there's nothing further to do.
+Future<void> shareExportedFile(String path, String mimeType) async {}

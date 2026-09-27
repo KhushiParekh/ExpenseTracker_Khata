@@ -185,6 +185,9 @@ class CalendarTab extends ConsumerWidget {
   }) {
     final isSunday = day.weekday == DateTime.sunday;
     final hasIncome = totals != null && totals.income != 0;
+    // A day whose only activity is a lent entry settling back nets to a
+    // negative expense — that's a reversal, not a real expense on this
+    // day, so it's deliberately not shown (matches "once settled, gone").
     final hasExpense = totals != null && totals.expense != 0;
 
     Color numberColor;

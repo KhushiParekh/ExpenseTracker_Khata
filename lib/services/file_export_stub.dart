@@ -4,3 +4,8 @@
 Future<String> saveTextFile(String fileName, String contents, String mimeType) async {
   throw UnsupportedError('Saving files is not supported on this platform.');
 }
+// (keep existing saveTextFile as-is)
+
+Future<void> shareExportedFile(String path, String mimeType) async {
+  throw UnsupportedError('Sharing files is not supported on this platform.');
+}

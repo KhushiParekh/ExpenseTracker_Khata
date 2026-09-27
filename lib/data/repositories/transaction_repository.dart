@@ -28,7 +28,7 @@ class TransactionRepository {
   /// `isYearly` entries are written exactly like any other transaction —
   /// the *filtering* (hiding them from Home tabs) happens at query time,
   /// not at write time, so Statistics can still include them.
-  Future<void> addTransaction({
+  Future<String> addTransaction({
     required String type, // 'expense' | 'income'
     required double amount,
     required DateTime date,
@@ -36,14 +36,12 @@ class TransactionRepository {
     String? categoryId,
     String remark = '',
     bool isYearly = false,
-    // Set together, and only when this call is one occurrence of a
-    // multi-occurrence "repeat this entry" series — see
-    // AddTransactionSheet._save and [stopRecurring].
     String? recurringGroupId,
     String? recurringFrequency,
   }) async {
+    final id = _uuid.v4();
     await db.into(db.transactions).insert(TransactionsCompanion.insert(
-          id: _uuid.v4(),
+          id: id,
           type: type,
           amount: amount,
           txnDate: date,
@@ -61,6 +59,7 @@ class TransactionRepository {
       final acc = await accountRepo.getById(accountId);
       await accountRepo.adjustBalance(accountId, _signedDelta(type, amount, acc));
     }
+    return id;
   }
 
   /// Edits an existing transaction in place, correctly reversing the old
@@ -256,7 +255,7 @@ class TransactionRepository {
       return map;
     });
   }
-  
+
   /// Same as [categoryBreakdown], but also folds in People (borrowed/lent)
 /// entries using the same signed-delta rules as the expense totals:
 ///  - `peopleByEntryDate`: ALL entries (settled or not) whose entryDate
@@ -270,9 +269,9 @@ class TransactionRepository {
 List<CategorySlice> categoryBreakdownWithPeople(
   List<Transaction> transactions,
   List<PeopleEntry> peopleByEntryDate,
-  List<PeopleEntry> peopleSettledInRange,
+  List<PeopleEntry> peopleSettledInRange, // now only used for lent's reversal
   List<Category> categories, {
-  required String kind, // 'expense' or 'income'
+  required String kind,
 }) {
   final byCategory = <String, double>{};
 
@@ -282,19 +281,14 @@ List<CategorySlice> categoryBreakdownWithPeople(
   }
 
   if (kind == 'expense') {
-    for (final p in peopleByEntryDate.where((p) => p.type == 'lent' && p.categoryId != null)) {
+    for (final p in peopleByEntryDate.where((p) => p.categoryId != null)) {
+      final counts = (p.type == 'lent' && !p.settled) || (p.type == 'borrowed' && p.settled);
+      if (!counts) continue;
       final key = p.categoryId!;
       byCategory[key] = (byCategory[key] ?? 0) + p.amount;
     }
-    for (final p in peopleSettledInRange.where((p) => p.categoryId != null)) {
-      final key = p.categoryId!;
-      final delta = p.type == 'borrowed' ? p.amount : -p.amount;
-      byCategory[key] = (byCategory[key] ?? 0) + delta;
-    }
   }
 
-  // A pie/donut can't show a negative slice — if a settlement reversal
-  // pushes a category to zero or below for the period, it just drops out.
   final positive = Map.fromEntries(byCategory.entries.where((e) => e.value > 0));
   final total = positive.values.fold(0.0, (a, b) => a + b);
   final slices = positive.entries.map((e) {

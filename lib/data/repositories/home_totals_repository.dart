@@ -37,11 +37,10 @@ class HomeTotalsRepository {
   HomeTotalsRepository(this.db, this.transactionRepo, this.peopleRepo);
 
   Stream<PeriodTotals> watchTotalsBetween(DateTime start, DateTime end) {
-    return Rx.combineLatest3(
+    return Rx.combineLatest2(
       db.watchTransactionsBetween(start, end, includeYearly: false),
       db.watchPeopleEntriesByEntryDate(start, end),
-      db.watchSettledPeopleEntriesBySettleDate(start, end),
-      (List<Transaction> txns, List<PeopleEntry> lentRows, List<PeopleEntry> settledRows) {
+      (List<Transaction> txns, List<PeopleEntry> peopleRows) {
         double income = 0, expense = 0;
         for (final t in txns) {
           if (t.type == 'income') {
@@ -50,11 +49,12 @@ class HomeTotalsRepository {
             expense += t.amount;
           }
         }
-        for (final p in lentRows) {
-          if (p.type == 'lent') expense += p.amount;
-        }
-        for (final p in settledRows) {
-          expense += p.type == 'borrowed' ? p.amount : -p.amount;
+        for (final p in peopleRows) {
+          if (p.type == 'lent' && !p.settled) {
+            expense += p.amount;
+          } else if (p.type == 'borrowed' && p.settled) {
+            expense += p.amount;
+          }
         }
         return PeriodTotals(income: income, expense: expense);
       },
@@ -84,11 +84,10 @@ class HomeTotalsRepository {
     final end = DateTime(year, month + 1, 1).subtract(const Duration(milliseconds: 1));
     final daysInMonth = DateTime(year, month + 1, 0).day;
 
-    return Rx.combineLatest3(
+    return Rx.combineLatest2(
       db.watchTransactionsBetween(start, end, includeYearly: false),
       db.watchPeopleEntriesByEntryDate(start, end),
-      db.watchSettledPeopleEntriesBySettleDate(start, end),
-      (List<Transaction> txns, List<PeopleEntry> lentRows, List<PeopleEntry> settledRows) {
+      (List<Transaction> txns, List<PeopleEntry> peopleRows) {
         final income = List<double>.filled(daysInMonth + 1, 0);
         final expense = List<double>.filled(daysInMonth + 1, 0);
         for (final t in txns) {
@@ -99,12 +98,12 @@ class HomeTotalsRepository {
             expense[d] += t.amount;
           }
         }
-        for (final p in lentRows) {
-          if (p.type == 'lent') expense[p.entryDate.day] += p.amount;
-        }
-        for (final p in settledRows) {
-          final d = p.settledAt!.day;
-          expense[d] += p.type == 'borrowed' ? p.amount : -p.amount;
+        for (final p in peopleRows) {
+          if (p.type == 'lent' && !p.settled) {
+            expense[p.entryDate.day] += p.amount;
+          } else if (p.type == 'borrowed' && p.settled) {
+            expense[p.entryDate.day] += p.amount;
+          }
         }
         return {
           for (int d = 1; d <= daysInMonth; d++) d: PeriodTotals(income: income[d], expense: expense[d]),
@@ -135,7 +134,7 @@ class HomeTotalsRepository {
       db.watchTransactionsBetween(start, end, includeYearly: false),
       db.watchPeopleEntriesByEntryDate(start, end),
       db.watchSettledPeopleEntriesBySettleDate(start, end),
-      (List<Transaction> txns, List<PeopleEntry> lentRows, List<PeopleEntry> settledRows) {
+      (List<Transaction> txns, List<PeopleEntry> peopleRows, List<PeopleEntry> settledRows) {
         final income = List<double>.filled(13, 0);
         final expense = List<double>.filled(13, 0);
         for (final t in txns) {
@@ -146,11 +145,15 @@ class HomeTotalsRepository {
             expense[m] += t.amount;
           }
         }
-        for (final p in lentRows) {
-          if (p.type == 'lent') expense[p.entryDate.month] += p.amount;
+        for (final p in peopleRows) {
+          if (p.type == 'lent') {
+            expense[p.entryDate.month] += p.amount;
+          } else if (p.type == 'borrowed' && p.settled) {
+            expense[p.entryDate.month] += p.amount;
+          }
         }
         for (final p in settledRows) {
-          expense[p.settledAt!.month] += p.type == 'borrowed' ? p.amount : -p.amount;
+          if (p.type == 'lent') expense[p.settledAt!.month] -= p.amount;
         }
         return [for (int m = 1; m <= 12; m++) MonthSummary(year: year, month: m, income: income[m], expense: expense[m])];
       },

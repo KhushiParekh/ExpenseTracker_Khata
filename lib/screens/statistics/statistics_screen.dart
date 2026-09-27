@@ -201,12 +201,9 @@ class StatisticsScreen extends ConsumerWidget {
                 // ever affects 'expense', never 'income'.
                 final events = <MapEntry<DateTime, double>>[
                   for (final r in matching) MapEntry(r.txnDate, r.amount),
-                  if (kind == 'expense') ...[
-                    for (final p in people.where((p) => p.type == 'lent'))
+                  if (kind == 'expense')
+                    for (final p in people.where((p) => (p.type == 'lent' && !p.settled) || (p.type == 'borrowed' && p.settled)))
                       MapEntry(p.entryDate, p.amount),
-                    for (final p in peopleSettled)
-                      MapEntry(p.settledAt!, p.type == 'borrowed' ? p.amount : -p.amount),
-                  ],
                 ];
 
                 final total = events.fold(0.0, (a, b) => a + b.value);

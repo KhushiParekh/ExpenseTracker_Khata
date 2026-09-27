@@ -115,28 +115,43 @@ class BackupService {
   /// Spreadsheet-friendly export of transactions only. Columns match what
   /// the importer expects, so a CSV export can be re-imported directly.
   /// Returns where the file was saved.
-  Future<String> exportCsv() async {
-    final txns = await db.allTransactionsForExport();
-    final cats = {for (final c in await db.allCategories()) c.id: c};
-    final accs = {for (final a in await db.allAccounts()) a.id: a};
+Future<String> exportCsv() async {
+  final txns = await db.allTransactionsForExport();
+  final people = await db.allPeopleEntriesForExport();
+  final cats = {for (final c in await db.allCategories()) c.id: c};
+  final accs = {for (final a in await db.allAccounts()) a.id: a};
 
-    final rows = <List<dynamic>>[
-      ['date', 'description', 'category', 'subcategory', 'type', 'amount', 'account', 'is_yearly'],
-      ...txns.map((t) => [
-            _dateFmt.format(t.txnDate),
-            t.remark,
-            t.categoryId == null ? '' : (cats[t.categoryId]?.name ?? ''),
-            '',
-            t.type,
-            t.amount.toStringAsFixed(2),
-            t.accountId == null ? '' : (accs[t.accountId]?.name ?? ''),
-            t.isYearly ? 'yes' : 'no',
-          ]),
-    ];
+  final rows = <List<dynamic>>[
+    ['date', 'description', 'category', 'type', 'amount', 'account', 'is_yearly', 'person_name', 'settled', 'settled_date'],
+    ...txns.map((t) => [
+          _dateFmt.format(t.txnDate),
+          t.remark,
+          t.categoryId == null ? '' : (cats[t.categoryId]?.name ?? ''),
+          t.type,
+          t.amount.toStringAsFixed(2),
+          t.accountId == null ? '' : (accs[t.accountId]?.name ?? ''),
+          t.isYearly ? 'yes' : 'no',
+          '', '', '',
+        ]),
+    ...people.map((p) => [
+          _dateFmt.format(p.entryDate),
+          p.remark,
+          p.categoryId == null ? '' : (cats[p.categoryId]?.name ?? ''),
+          p.type, // borrowed / lent
+          p.amount.toStringAsFixed(2),
+          p.accountId == null ? '' : (accs[p.accountId]?.name ?? ''),
+          'no',
+          p.personName,
+          p.settled ? 'yes' : 'no',
+          p.settledAt == null ? '' : _dateFmt.format(p.settledAt!),
+        ]),
+  ];
 
-    final csvStr = const ListToCsvConverter(eol: '\n').convert(rows);
-    return saveTextFile('khaata-transactions-${_fileStamp()}.csv', csvStr, 'text/csv');
-  }
+  final csvStr = const ListToCsvConverter(eol: '\n').convert(rows);
+  final path = await saveTextFile('khaata-full-export-${_fileStamp()}.csv', csvStr, 'text/csv');
+  await shareExportedFile(path, 'text/csv');
+  return path;
+}
 
   String _fileStamp() => DateFormat('yyyyMMdd-HHmm').format(DateTime.now());
 
